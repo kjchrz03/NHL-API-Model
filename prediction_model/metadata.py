@@ -3,14 +3,17 @@
 # ============================================================
 
 from typing import Dict, List
+from config import MODEL_VERSION
+
+
 
 # ------------------------------------------------------------
 # Model identity
 # ------------------------------------------------------------
 
 MODEL_METADATA = {
-    "model_name": "playoff_models_xgb_rf",
-    "version": "wc_field_pressure_v4",
+    "model_name": "playoff_models",
+    "version": MODEL_VERSION,
     "snapshot_grain": "team-day",
     "target": "made_playoffs",
     "description": (
@@ -66,6 +69,7 @@ FEATURE_GROUPS: Dict[str, List[str]] = {
         "pk_pct",
         "ppng_rank",
         "pk_rank",
+        "times_sh_pg",
     ],
     "Goaltending & Shooting": [
         "c_shot_pct",
@@ -112,6 +116,7 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "pk_pct": "Penalty kill success rate",
     "ppng_rank": "League rank in power-play net goals",
     "pk_rank": "League rank in penalty-kill effectiveness",
+    "times_sh_pg" : "Average number of times short handed per game",
 
     "c_shot_pct": "Team shooting percentage over the season",
     "c_sv_pct": "Team save percentage over the season",
