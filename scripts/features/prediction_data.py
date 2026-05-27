@@ -144,7 +144,7 @@ def run_prediction_data(
         return df
 
     # ============================================================
-    # Games played spine (canonical)
+    # Games played spine (built from game summary)
     # ============================================================
     def build_games_played_spine(
         backfill_df: pd.DataFrame,
@@ -152,19 +152,20 @@ def run_prediction_data(
     ) -> pd.DataFrame:
         rows = []
         for _, row in backfill_df.iterrows():
-            rows.append({
+            rows.append({ #away games
                 "season_id": int(row["season_id"]),
                 "game_id": int(row["game_id"]),
                 "team_id": int(row["away_team"]),
                 "game_date": pd.to_datetime(row["game_date"]),
             })
-            rows.append({
+            rows.append({ #home games
                 "season_id": int(row["season_id"]),
                 "game_id": int(row["game_id"]),
                 "team_id": int(row["home_team"]),
                 "game_date": pd.to_datetime(row["game_date"]),
             })
 
+    
         spine = pd.DataFrame(rows).sort_values(
             ["season_id", "team_id", "game_date", "game_id"]
         ).reset_index(drop=True)
@@ -395,7 +396,7 @@ def run_prediction_data(
         df = df.copy()
 
         # ============================================================
-        # ✅ SAFE OFFSET FETCH (fixes your crash)
+        # ✅ SAFE OFFSET FETCH 
         # df.get("gp_offset", 0) returns an int if missing → no .fillna()
         # ============================================================
 
@@ -623,14 +624,9 @@ def run_prediction_data(
 
     def cumulative_rush(rush_stats: pd.DataFrame, offsets: pd.DataFrame | None = None) -> pd.DataFrame:
         rush = rush_stats.copy()
-        rush = rush.drop_duplicates(subset=["season_id", "game_id", "team_id"])
+        rush = rush.sort_values(["season_id", "team_id", "game_id"]).reset_index(drop=True)
 
-        sort_cols = (
-            ["season_id", "team_id", "game_date", "game_id"]
-            if "game_date" in rush.columns
-            else ["season_id", "team_id", "game_id"]
-        )
-        rush = rush.sort_values(sort_cols)
+        rush = rush.drop_duplicates(subset=["season_id", "team_id", "game_id"])
 
         REQUIRED_OFFSETS = [
             "c_rush_shots_for_offset",
@@ -761,16 +757,12 @@ def run_prediction_data(
         for c in BASE_COLS:
             if c not in shots.columns:
                 shots[c] = 0
+                
+        shots = shots.sort_values(["season_id", "team_id", "game_id"]).reset_index(drop=True)
 
         shots = shots.drop_duplicates(subset=["season_id", "game_id", "team_id"])
 
-        sort_cols = (
-            ["season_id", "team_id", "game_date", "game_id"]
-            if "game_date" in shots.columns
-            else ["season_id", "team_id", "game_id"]
-        )
-        shots = shots.sort_values(sort_cols)
-
+        
         REQUIRED_OFFSETS = [
             "c_shots_for_offset",
             "c_shots_against_offset",
@@ -991,14 +983,11 @@ def run_prediction_data(
         scoring = danger_scoring.copy()
         shots = corsi_stats.copy()
 
-        sort_cols = (
-            ["season_id", "team_id", "game_date", "game_id"]
-            if "game_date" in scoring.columns
-            else ["season_id", "team_id", "game_id"]
-        )
+        scoring = scoring.sort_values(["season_id", "team_id", "game_id"]).reset_index(drop=True)
+        scoring = scoring.drop_duplicates(subset=["season_id", "team_id", "game_id"])
 
-        scoring = scoring.drop_duplicates(subset=["season_id", "game_id", "team_id"]).sort_values(sort_cols)
-        shots = shots.drop_duplicates(subset=["season_id", "game_id", "team_id"]).sort_values(sort_cols)
+        shots = shots.sort_values(["season_id", "team_id", "game_id"]).reset_index(drop=True)
+        shots = shots.drop_duplicates(subset=["season_id", "team_id", "game_id"])
 
         REQUIRED_OFFSETS = [
             "c_SCF_offset", "c_SCSF_offset", "c_SCGF_offset", "c_SCA_offset",
@@ -1130,14 +1119,12 @@ def run_prediction_data(
 
     def cumulative_sog(sog_stats: pd.DataFrame, offsets: pd.DataFrame | None = None) -> pd.DataFrame:
         sog = sog_stats.copy()
+        
+        sog = sog.sort_values(["season_id", "team_id", "game_id"]).reset_index(drop=True)
 
-        sog = sog.drop_duplicates(subset=["season_id", "game_id", "team_id"])
-        sort_cols = (
-            ["season_id", "team_id", "game_date", "game_id"]
-            if "game_date" in sog.columns
-            else ["season_id", "team_id", "game_id"]
+        sog = sog.drop_duplicates(
+            subset=["season_id","team_id","game_id"]
         )
-        sog = sog.sort_values(sort_cols)
 
         REQUIRED_OFFSETS = [
             "c_shots_for_offset",
@@ -1244,9 +1231,10 @@ def run_prediction_data(
     # ============================================================
     # Strength of schedule (uses games_before)
     # ============================================================
-    def strength_of_schedule(backfill_df: pd.DataFrame) -> pd.DataFrame:
+
+    def strength_of_schedule(game_summary: pd.DataFrame, sos_standings: pd.DataFrame) -> pd.DataFrame:
         rows = []
-        for _, row in backfill_df.iterrows():
+        for _, row in game_summary.iterrows():## Home and Away results from game summary
             rows.append({
                 "season_id": int(row["season_id"]),
                 "game_id": int(row["game_id"]),
@@ -1268,49 +1256,173 @@ def run_prediction_data(
                 "goals_against": row["awayTeam.score"],
             })
 
-        games_sos = pd.DataFrame(rows).sort_values(
+        games_df = pd.DataFrame(rows).sort_values(
             ["season_id", "team_id", "game_date", "game_id"]
         ).reset_index(drop=True)
 
-        games_sos["win"] = (games_sos["goals_for"] > games_sos["goals_against"]).astype(int)
+        games_sos = games_df.merge(
+            sos_standings[["game_date", "team_id", "games_remaining", "points_pct"]],
+            on=["game_date", "team_id"],
+            how="left"
+        )
 
         g = games_sos.groupby(["season_id", "team_id"], sort=False)
         games_sos["games_before"] = g.cumcount()
         games_sos["games_played"] = games_sos["games_before"] + 1
+        games_sos["games_remaining"] = games_sos["games_remaining"].fillna(0).astype(int)
 
-        games_sos["wins_before"] = g["win"].cumsum().shift(1).fillna(0)
-        games_sos["win_pct_before"] = np.where(
-            games_sos["games_before"] > 0,
-            games_sos["wins_before"] / games_sos["games_before"],
-            np.nan,
+        pts_ffill = (
+            games_sos
+            .sort_values(["season_id", "team_id", "game_date"])
+            .groupby(["season_id", "team_id"])["points_pct"]
+            .ffill()
         )
+        games_sos["points_pct"] = pts_ffill
 
         opp_win = (
-            games_sos[["season_id", "tri_code", "game_id", "win_pct_before"]]
-            .rename(columns={"tri_code": "opponent", "win_pct_before": "opponent_win_pct_before"})
+            games_sos[["season_id", "tri_code", "game_id", "games_played", "points_pct"]]
+            .rename(columns={
+                "tri_code": "opponent",
+                "points_pct": "opponent_points_pct",
+                "games_played": "opp_gp"
+            })
         )
 
         games_sos = games_sos.merge(
-            opp_win[["season_id", "opponent", "game_id", "opponent_win_pct_before"]],
+            opp_win,
             on=["season_id", "opponent", "game_id"],
             how="left",
         )
 
         games_sos["sos_past"] = (
-            games_sos.groupby(["season_id", "team_id"])["opponent_win_pct_before"]
-            .expanding().mean()
+            games_sos.groupby(["season_id", "team_id"])["opponent_points_pct"]
+            .expanding()
+            .mean()
             .reset_index(level=[0, 1], drop=True)
         )
 
-        games_sos["sos_future"] = (
-            games_sos.iloc[::-1]
-            .groupby(["season_id", "team_id"])["opponent_win_pct_before"]
-            .expanding().mean()
-            .reset_index(level=[0, 1], drop=True)
-            .iloc[::-1]
+        # ---------------------------------------------------------
+        # Future SOS base dataframe
+        # ---------------------------------------------------------
+
+        future_games = games_sos[
+            [
+                'season_id',
+                'game_date',
+                'game_id',
+                'team_id',
+                'tri_code',
+                'opponent',
+                'points_pct',
+                'sos_past',
+                'opponent_points_pct'
+            ]
+        ].sort_values(
+            ["season_id", "game_date", "game_id", "team_id"]
+        ).copy()
+
+        # ---------------------------------------------------------
+        # Pivot standings table
+        # ---------------------------------------------------------
+
+        future_standings = (
+            future_games
+            .pivot(
+                index="game_date",
+                columns="tri_code",
+                values="points_pct"
+            )
+            .sort_index()
+            .ffill()
         )
 
-        return games_sos.drop(columns=["goals_for", "goals_against", "opponent_win_pct_before"])
+        # ---------------------------------------------------------
+        # Ensure complete daily index
+        # ---------------------------------------------------------
+
+        future_standings.index = pd.to_datetime(future_standings.index)
+
+        full_dates = pd.date_range(
+            future_standings.index.min(),
+            future_standings.index.max(),
+            freq="D"
+        )
+
+        future_standings = (
+            future_standings
+            .reindex(full_dates)
+            .ffill()
+        )
+
+        future_standings.index.name = "game_date"
+
+        # ---------------------------------------------------------
+        # Remaining SOS calculation
+        # ---------------------------------------------------------
+
+        def calc_remaining_sos(group):
+
+            group = group.sort_values("game_date").copy()
+
+            remaining_sos = []
+
+            first_standings_date = future_standings.index.min()
+
+            for i in range(len(group)):
+
+                lookup_date = (
+                    group.iloc[i]["game_date"]
+                    - pd.Timedelta(days=1)
+                )
+
+                # Skip dates before standings exist
+                if lookup_date < first_standings_date:
+                    remaining_sos.append(pd.NA)
+                    continue
+
+                remaining_opponents = (
+                    group.iloc[i:]["opponent"]
+                    .dropna()
+                    .unique()
+                    .tolist()
+                )
+
+                # Only keep opponents that exist in standings
+                remaining_opponents = [
+                    opp for opp in remaining_opponents
+                    if opp in future_standings.columns
+                ]
+
+                if len(remaining_opponents) == 0:
+                    remaining_sos.append(pd.NA)
+                    continue
+
+                vals = future_standings.loc[
+                    lookup_date,
+                    remaining_opponents
+                ]
+
+                remaining_sos.append(vals.mean())
+
+            group["sos_future"] = remaining_sos
+
+            return group
+
+        # ---------------------------------------------------------
+        # Apply by season/team
+        # ---------------------------------------------------------
+
+        future_games = (
+            future_games
+            .groupby(["season_id", "team_id"], group_keys=False)
+            .apply(calc_remaining_sos, include_groups=False)
+            .reset_index(drop=True)
+        )
+        
+        future_games = future_games[["season_id", "game_id", "team_id", "sos_past", "sos_future"]]
+        
+        return future_games
+        
     # ============================================================
     # Calculate Features from Goalie Stats
     # ============================================================
@@ -1812,13 +1924,7 @@ def run_prediction_data(
         special_teams             = drop_structural_cols(special_teams)
         games_sos                 = drop_structural_cols(games_sos)
 
-        # print("rush:", cumulative_rush_stats[cumulative_rush_stats['team_id']==6])
-        # print("shooting:", cumulative_shooting_stats[cumulative_shooting_stats['team_id']==6])
-        # print("scoring:", cumulative_scoring[cumulative_scoring['team_id']==6])
-        # print("sog:", cumulative_shots_on_goal[cumulative_shots_on_goal['team_id']==6])
-        # print("goalie:", cumulative_goalie_stats[cumulative_goalie_stats['team_id']==6])
-        # print("special teams:", special_teams[special_teams['team_id']==6])
-        # print("sos:", games_sos[games_sos['team_id']==6])        
+
         # -------------------------------------------------
         # Merge chain (ALL INNER ON SPINE)
         # -------------------------------------------------
@@ -2087,9 +2193,11 @@ def run_prediction_data(
         # ------------------------------------------------------------
         # 6. Build canonical game × team spine
         # ------------------------------------------------------------
+
+        
         games_spine = build_games_played_spine(
             backfill_df=backfill_df,
-            offsets=offsets,
+            offsets=offsets
         )
 
         print(f"Games spine rows: {len(games_spine)}")
@@ -2132,9 +2240,7 @@ def run_prediction_data(
             ).dt.date
         )
 
-        tables["daily_standings"] = tables["daily_standings"][
-            tables["daily_standings"]["game_day"].between(min_day, max_day)
-        ].drop(columns=["game_day"])
+        tables["daily_standings"] = tables["daily_standings"].drop(columns=["game_day"])
 
         # ------------------------------------------------------------
         # ✅ DEBUG: Confirm table row counts
@@ -2156,7 +2262,16 @@ def run_prediction_data(
 
 
         print("▶ Building strength of schedule...")
-        games_sos = strength_of_schedule(game_summary)
+        sos_standings = con.execute("""
+                select game_date, season_id, tri_code, team_id, 
+                games_played, games_remaining, points_pct
+                from all_standings_daily
+                WHERE season_id = ?
+                ORDER BY game_date
+                """, [season_id]).df()
+                
+        games_sos = strength_of_schedule(game_summary=game_summary,
+                                         sos_standings=sos_standings)
         games_sos = games_sos[games_sos["game_id"].isin(backfill_df["game_id"])]
 
 

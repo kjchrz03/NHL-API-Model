@@ -10,9 +10,7 @@ import time
 import random
 import duckdb
 
-
-DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\duckdb\nhl_data.duckdb"
-
+DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\data\duckdb\nhl_data.duckdb"
 
 # ============================================================
 # SAFE REQUEST WITH BACKOFF
@@ -193,19 +191,21 @@ def run_goalie_stats(con: duckdb.DuckDBPyConnection, season_id: int):
         print("⚠ No completed games found.")
         return
 
-    existing_game_ids = load_existing_goalie_game_ids(con, season_id)
+    # existing_game_ids = load_existing_goalie_game_ids(con, season_id)
 
-    missing = summary_df[
-        ~summary_df["game_id"].isin(existing_game_ids)
-    ]
+    # missing = summary_df[
+    #     ~summary_df["game_id"].isin(existing_game_ids)
+    # ]
 
-    if missing.empty:
-        print("✅ No missing goalie games found.")
-        return
+    # if missing.empty:
+    #     print("✅ No missing goalie games found.")
+    #     return
 
-    start_date = pd.to_datetime(missing["game_date"].min()).strftime("%Y-%m-%d")
-    end_date = pd.to_datetime(missing["game_date"].max()).strftime("%Y-%m-%d")
-
+    # start_date = pd.to_datetime(missing["game_date"].min()).strftime("%Y-%m-%d")
+    # end_date = pd.to_datetime(missing["game_date"].max()).strftime("%Y-%m-%d")
+    start_date = pd.to_datetime(summary_df["game_date"].min()).strftime("%Y-%m-%d")
+    end_date = pd.to_datetime(summary_df["game_date"].max()).strftime("%Y-%m-%d")
+    
     print(f"📅 Fetching goalie games from {start_date} → {end_date}")
 
     goalie_updates = get_goalie_games(start_date, end_date)
@@ -262,8 +262,15 @@ if __name__ == "__main__":
     con = duckdb.connect(DB_PATH)
 
     # Adjust range as needed
-    for season_id in range(20002001, 20102011 + 1):
-        run_goalie_stats(con, season_id)
 
+    season_ids = [20132014,
+        20142015, 20152016, 20162017, 20172018,
+        20182019, 20192020, 20202021, 20212022,
+        20222023, 20232024, 20242025, 20252026
+    ]
+
+
+    for season_id in season_ids:
+        run_goalie_stats(con, season_id)
     con.close()
     print("\n🏁 Goalie stats update complete.")

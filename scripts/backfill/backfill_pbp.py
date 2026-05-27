@@ -12,8 +12,9 @@ import duckdb
 
 warnings.filterwarnings("ignore")
 pd.options.mode.chained_assignment = None
+DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\data\duckdb\nhl_data.duckdb"
 
-DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\duckdb\nhl_data.duckdb"
+
 
 
 # ============================================================
@@ -371,7 +372,11 @@ if __name__ == "__main__":
 
     con = duckdb.connect(DB_PATH)
 
-    for season_id in range(20112012, 20112012 + 1):
+    # for season_id in range(20232024+1):
+    #     run_plays(con, season_id)
+    season_ids = [20232024]
+
+    for season_id in season_ids:
         run_plays(con, season_id)
 
     con.close()

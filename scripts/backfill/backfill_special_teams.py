@@ -13,7 +13,7 @@ import duckdb
 warnings.filterwarnings("ignore")
 pd.options.mode.chained_assignment = None
 
-DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\duckdb\nhl_data.duckdb"
+DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\data\duckdb\nhl_data.duckdb"
 
 # ============================================================
 # SAFE REQUEST WITH BACKOFF
@@ -288,11 +288,7 @@ def run_special_teams(con: duckdb.DuckDBPyConnection, season_id: int):
         print("⚠ No data returned from API.")
         return
 
-    # -----------------------------
-    # Normalize PK
-    # -----------------------------
-    if not pk_df.empty:
-        pk_df = pk_df.rename(columns={
+    pk_df = pk_df.rename(columns={
             "season": "season_id",
             "gameId": "game_id",
             "teamId": "team_id",
@@ -316,14 +312,10 @@ def run_special_teams(con: duckdb.DuckDBPyConnection, season_id: int):
             "timesShorthandedPerGame": "times_sh_pg",
         })
 
-        pk_df["season_id"] = season_id
-        pk_df = enforce_schema(pk_df, PK_SCHEMA)
-
-    # -----------------------------
-    # Normalize PP
-    # -----------------------------
-    if not pp_df.empty:
-        pp_df = pp_df.rename(columns={
+    pk_df["season_id"] = season_id
+    
+    
+    pp_df = pp_df.rename(columns={
             "season": "season_id",
             "gameId": "game_id",
             "teamId": "team_id",
@@ -347,31 +339,46 @@ def run_special_teams(con: duckdb.DuckDBPyConnection, season_id: int):
             "shGoalsAgainstPerGame": "sh_ga_pg",
         })
 
-        pp_df["season_id"] = season_id
-        pp_df = enforce_schema(pp_df, PP_SCHEMA)
+    pp_df["season_id"] = season_id
 
-    # -----------------------------
+    pk_df = enforce_schema(pk_df, PK_SCHEMA)
+    pp_df = enforce_schema(pp_df, PP_SCHEMA)
+
+   # -----------------------------
     # INSERT PK
     # -----------------------------
     if not pk_df.empty:
-        con.register("pk_updates", pk_df)
+        print(pk_df.info())
+        con.register("pk_df", pk_df)
+        
         con.execute("""
-            DELETE FROM all_pk
-            WHERE game_id IN (SELECT DISTINCT game_id FROM pk_updates)
-        """)
-        con.execute("INSERT INTO all_pk SELECT * FROM pk_updates")
+        DELETE FROM all_pk
+        WHERE game_id IN (SELECT DISTINCT game_id FROM pk_df)
+    """)
+        con.execute("""
+        INSERT INTO all_pk
+        SELECT * FROM pk_df
+    """)
+
         print(f"✔ Inserted {len(pk_df):,} PK rows")
+
 
     # -----------------------------
     # INSERT PP
     # -----------------------------
     if not pp_df.empty:
-        con.register("pp_updates", pp_df)
+        print(pp_df.info())
+        con.register("pp_df", pp_df)
+        
         con.execute("""
-            DELETE FROM all_pp
-            WHERE game_id IN (SELECT DISTINCT game_id FROM pp_updates)
-        """)
-        con.execute("INSERT INTO all_pp SELECT * FROM pp_updates")
+        DELETE FROM all_pp
+        WHERE game_id IN (SELECT DISTINCT game_id FROM pp_df)
+    """)
+        con.execute("""
+        INSERT INTO all_pp
+        SELECT * FROM pp_df
+    """)
+
         print(f"✔ Inserted {len(pp_df):,} PP rows")
 
 
@@ -382,8 +389,13 @@ if __name__ == "__main__":
 
     con = duckdb.connect(DB_PATH)
 
-    for season_id in range(20122013, 20122013 + 1):
-        run_special_teams(con, season_id)
+    season_ids = [20132014,
+        20142015, 20152016, 20162017, 20172018,
+        20182019, 20192020, 20202021, 20212022,
+        20222023, 20232024, 20242025, 20252026
+    ]
 
+    for season_id in season_ids:
+        run_special_teams(con, season_id)
     con.close()
     print("\n🏁 Historical special teams backfill complete.")

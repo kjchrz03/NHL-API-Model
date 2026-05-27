@@ -162,7 +162,7 @@ def main():
                 con=con
             )
 
-        if not args.skip_prediction_data:
+        if not args.skip_prediction_data:########################################is the sos still wrong? NA values found
             run_step(
                 "Prediction Data",
                 run_prediction_data,
