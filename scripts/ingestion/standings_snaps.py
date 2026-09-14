@@ -22,7 +22,7 @@ def run_standings_snaps(
     season_id: int,
 ):
     """
-    Update standings stanpshot data for a given season.
+    Update standings snapshot data for a given season.
     Assumes game summary has already been run.
     """
 
@@ -44,10 +44,31 @@ def run_standings_snaps(
         if max_date is None:
             return None
 
-        max_date = pd.to_datetime(max_date) + pd.Timedelta(days=1)
+        max_date = pd.to_datetime(max_date) + pd.Timedelta(days=3)
         print(f"Last snapshot date +1: {max_date.date()}")
         return max_date
 
+
+    # Because every run begins with last_valid_day = None, the first date of a new run can't carry forward the previous day's standings from DuckDB.
+    # This loads the rows for the most recent standings date before the new start_date. and returns all teams from that snapshot.
+    def load_last_valid_day(season_id: int, before_date) -> list[dict] | None:
+        df = con.execute("""
+            SELECT *
+            FROM all_standings_daily
+            WHERE season_id = ?
+            AND game_date < ?
+            AND game_date = (
+                SELECT MAX(game_date)
+                FROM all_standings_daily
+                WHERE season_id = ?
+                    AND game_date < ?
+            )
+        """, [season_id, before_date, season_id, before_date]).fetch_df()
+
+        if df.empty:
+            return None
+
+        return df.to_dict("records")
 
     def load_last_game_summary_date(season_id: int) -> pd.Timestamp | None:
 
@@ -204,8 +225,7 @@ def run_standings_snaps(
         base_url = "https://api-web.nhle.com/v1/standings/"
         all_rows = []
 
-        # Cache last valid standings day (for no-game days or API gaps)
-        last_valid_day = None
+        last_valid_day = load_last_valid_day(season_id, start_date)
 
         start_date = pd.to_datetime(start_date)
         end_date = pd.to_datetime(end_date)
@@ -239,7 +259,6 @@ def run_standings_snaps(
                 for row in last_valid_day:
                     row_copy = row.copy()
                     row_copy["game_date"] = date_str
-                    row_copy["date"] = date_str
                     all_rows.append(row_copy)
 
                 continue
@@ -412,40 +431,58 @@ def run_standings_snaps(
     snap_updates = enforce_snap_schema(snap_updates)
 
     con.register("snap_updates", snap_updates)
+    
+    con.execute("BEGIN")
 
-    con.execute("""
-        DELETE FROM all_standings_daily
-        WHERE game_date IN (SELECT DISTINCT game_date FROM snap_updates)
-    """)
+    try:
+        con.execute("""
+            DELETE FROM all_standings_daily
+            WHERE season_id = ?
+            AND game_date IN (SELECT DISTINCT game_date FROM snap_updates)
+        """, [season_id])
 
-    con.execute("""
-        INSERT INTO all_standings_daily
-        SELECT * FROM snap_updates
-    """)
+        con.execute("""
+            INSERT INTO all_standings_daily
+            SELECT * FROM snap_updates
+        """)
+
+        con.execute("COMMIT")
+
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    print(f"Inserted {len(snap_updates):,} daily standings updated rows.")
+    
     
     #20132014 last season of PHX --> ARI
     #20252026 UTA is 68, previous version is 2425 season
 
-    con.execute("""UPDATE all_standings_daily s
-    SET team_id = t.team_id
-    FROM all_teams t
-    WHERE s.tri_code = t.tri_code
-    AND s.tri_code != 'UTA';
-        """)
+    # con.execute("""
+    #     UPDATE all_standings_daily s
+    #     SET team_id = t.team_id
+    #     FROM all_teams t
+    #     WHERE s.tri_code = t.tri_code
+    #     AND s.tri_code != 'UTA'
+    #     AND s.season_id = ?
+    #     AND s.game_date IN (
+    #         SELECT DISTINCT game_date
+    #         FROM snap_updates
+    #     )
+    # """, [season_id])
 
-    con.execute("""UPDATE all_standings_daily
-    SET team_id = 
-        CASE
-            WHEN season_id = 20242025 THEN 59
-            WHEN season_id >= 20252026 THEN 68
-            ELSE team_id
-        END
-    WHERE tri_code = 'UTA';
-        """)
-    con.execute("""SELECT season_id, tri_code, team_id
-    FROM all_standings_daily
-    WHERE tri_code = 'UTA'
-    ORDER BY season_id;
-    """)
-
-    print(f"Inserted {len(snap_updates):,} daily standings updated rows.")
+    # con.execute("""UPDATE all_standings_daily
+    # SET team_id = 
+    #     CASE
+    #         WHEN season_id = 20242025 THEN 59
+    #         WHEN season_id >= 20252026 THEN 68
+    #         ELSE team_id
+    #     END
+    # WHERE tri_code = 'UTA';
+    #     """)
+    
+    
+    # con.execute("""SELECT season_id, tri_code, team_id
+    #     FROM all_standings_daily
+    #     WHERE tri_code = 'UTA'
+    #     ORDER BY season_id;
+    #     """)

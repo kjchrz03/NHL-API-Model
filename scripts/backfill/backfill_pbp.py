@@ -374,7 +374,7 @@ if __name__ == "__main__":
 
     # for season_id in range(20232024+1):
     #     run_plays(con, season_id)
-    season_ids = [20232024]
+    season_ids = [20252026]
 
     for season_id in season_ids:
         run_plays(con, season_id)

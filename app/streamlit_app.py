@@ -1,6 +1,6 @@
 # Import the external library
 # Import the function from season_data.py
-from scripts.current_standings import fetch_current_standings
+from current_standings import fetch_current_standings
 import streamlit as st
 import streamlit.components.v1 as components
 from streamlit_echarts import st_echarts
@@ -539,7 +539,7 @@ with tab_txgiving:
 
     @st.cache_data(ttl="6h")
     def load_full_data():
-        df = pd.read_csv("predictions_concat.csv")
+        df = pd.read_csv(r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\app\predictions_concat.csv")
 
         # Normalize fields
         df["tri_code"] = df["tri_code"].str.upper().str.strip()

@@ -13,7 +13,7 @@ import duckdb
 warnings.filterwarnings("ignore")
 pd.options.mode.chained_assignment = None
 
-DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\duckdb\nhl_data.duckdb"
+DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\data\duckdb\nhl_data.duckdb"
 
 # ============================================================
 # Safe request helper
@@ -430,8 +430,9 @@ def build_season_standings(con, season_id: int):
 if __name__ == "__main__":
 
     con = duckdb.connect(DB_PATH)
-
-    for season_id in range(20002001, 20042005 + 1):
+    season_ids = [20252026]
+    # for season_id in range(20002001, 20042005 + 1):
+    for season_id in season_ids:
         build_season_standings(con, season_id)
 
     con.close()
