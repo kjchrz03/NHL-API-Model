@@ -24,7 +24,7 @@ def run_game_summary(
     season_id: int,
     season_start: pd.Timestamp,
     season_end: pd.Timestamp,
-) -> None:
+) -> pd.DataFrame:
     """
     Update all_game_summary for a given season.
     Handles FUT → OFF transitions only.
@@ -99,38 +99,26 @@ def run_game_summary(
     def fetch_new_games(past_games: pd.DataFrame) -> pd.DataFrame:
         base_url = "https://api-web.nhle.com/v1/schedule/"
 
-        # -------------------------------------------------
-        # Determine fetch window
-        # -------------------------------------------------
-        if past_games.empty or "api_snapshot_date" not in past_games.columns:
-            start_date = season_start
-        else:
-            start_date = (
-                pd.to_datetime(past_games["api_snapshot_date"].max())
-                + pd.Timedelta(days=1)
-            )
-
-        run_date = pd.Timestamp.today().normalize()
-
-        # date-only end window
-        end_date = min(
-            run_date.date(),
-            season_end if isinstance(season_end, date) else season_end.date(),
+        # Only check dates that still have unresolved FUT games
+        dates_to_check = (
+            pd.to_datetime(past_games["game_date"])
+            .dt.normalize()
+            .drop_duplicates()
+            .sort_values()
         )
-        end_date = pd.Timestamp(end_date)
 
-        if start_date > end_date:
-            print("No new dates to retrieve — already up to date.")
+        if dates_to_check.empty:
+            print("No unresolved game dates to check.")
             return pd.DataFrame()
 
-        print(f"Fetching API games from {start_date.date()} → {end_date.date()}")
+        print(
+            f"Checking {len(dates_to_check)} unresolved game date(s): "
+            f"{dates_to_check.min().date()} → {dates_to_check.max().date()}"
+        )
 
-        # -------------------------------------------------
-        # Pull games
-        # -------------------------------------------------
         all_games: list[dict] = []
 
-        for d in pd.date_range(start=start_date, end=end_date, freq="D"):
+        for d in dates_to_check:
             url = f"{base_url}{d.strftime('%Y-%m-%d')}"
             r = requests.get(url, timeout=10)
 
@@ -139,12 +127,13 @@ def run_game_summary(
                 continue
 
             data = r.json()
+
             for week in data.get("gameWeek", []):
                 for game in week.get("games", []):
                     all_games.append(game)
 
         if not all_games:
-            print("No new games returned from API.")
+            print("No games returned from API.")
             return pd.DataFrame()
 
         print(f"Retrieved {len(all_games):,} games from API.")
@@ -153,6 +142,8 @@ def run_game_summary(
         # Normalize to your DuckDB schema
         # -------------------------------------------------
         df = pd.json_normalize(all_games)
+
+        df = df.drop_duplicates(subset=["id"]).copy()
 
         # regular season only
         df = df[df["gameType"] == 2].copy()
@@ -183,11 +174,9 @@ def run_game_summary(
         df["game_date_time"] = df["startTimeUTC"].dt.tz_convert(eastern)
         df["game_date"] = df["game_date_time"].dt.strftime("%Y-%m-%d")
 
-        # snapshot date (run date)
+        # snapshot date
         df["api_snapshot_date"] = pd.Timestamp.now()
-        # run_date.strftime("%Y-%m-%d")
 
-        # select ONLY the columns your table expects (NOTE: use renamed cols)
         df = df[
             [
                 "game_id",
@@ -205,7 +194,6 @@ def run_game_summary(
             ]
         ].copy()
 
-        # enforce schema/types/order
         df = enforce_gs_schema(df)
 
         df.sort_values("game_id", inplace=True)
@@ -213,8 +201,6 @@ def run_game_summary(
 
         print(f"Fetched {len(df):,} games from API")
         return df
-
-
     # ============================================================
     # Determine Which Games Need Replacement (FUT -> OFF)
     # ============================================================
@@ -304,20 +290,20 @@ def run_game_summary(
 
 
     # ============================================================
-    # Execution (your existing block)
+    # Execution
     # ============================================================
 
     past_games = load_games(season_id)
 
     if past_games.empty:
         print("✅ Game summary table already up to date.")
-        return
+        return pd.DataFrame()
 
     new_games = fetch_new_games(past_games)
 
     if new_games.empty:
         print("✅ No API updates needed.")
-        return
+        return pd.DataFrame()
 
     updated_games = split_insert_and_replace(
         past_games=past_games,
@@ -326,9 +312,11 @@ def run_game_summary(
 
     if updated_games.empty:
         print("✅ No completed games to update.")
-        return
+        return pd.DataFrame()
 
     print(f"Updating {len(updated_games):,} games...")
     replace_games(updated_games)
 
     print("✅ Game summary update complete.")
+
+    return updated_games

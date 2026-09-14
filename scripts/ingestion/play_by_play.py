@@ -24,7 +24,8 @@ def run_play_by_play(
     *,
     con: duckdb.DuckDBPyConnection,
     season_id: int,
-):
+    changed_games: pd.DataFrame | None = None,
+    ):
     """
     Update play-by-play data for a given season.
     Assumes game summary has already been run.
@@ -35,6 +36,24 @@ def run_play_by_play(
     # ============================================================
     # Helpers
     # ============================================================
+    def load_missing_pbp_ids(season_id: int) -> list[int]:
+        query = """
+            SELECT DISTINCT gs.game_id
+            FROM all_game_summary AS gs
+            WHERE gs.season_id = ?
+            AND gs.gameState = 'OFF'
+            AND NOT EXISTS (
+                SELECT 1
+                FROM all_play_by_play AS pbp
+                WHERE pbp.season_id = gs.season_id
+                    AND pbp.game_id = gs.game_id
+            )
+            ORDER BY gs.game_id
+        """
+
+        df = con.execute(query, [season_id]).df()
+        return df["game_id"].astype("int64").tolist()
+
 
     def load_last_pbp_id(season_id: int) -> int | None:
         query = """
@@ -522,19 +541,35 @@ def run_play_by_play(
     # INGESTION / BACKFILL EXECUTION
     # ============================================================
 
-    pbp_max_id = load_last_pbp_id(season_id)
-    gs_max_id = load_last_game_summary_id(season_id)
+    missing_ids = load_missing_pbp_ids(season_id)
 
-    if pbp_max_id == gs_max_id:
+    changed_ids = []
+
+    if changed_games is not None and not changed_games.empty:
+        changed_ids = (
+            changed_games["game_id"]
+            .dropna()
+            .astype("int64")
+            .unique()
+            .tolist()
+        )
+
+    game_ids = sorted(set(changed_ids) | set(missing_ids))
+
+    if not game_ids:
         print("✅ PBP and game summary are in sync.")
         return
 
-    missing_ids = list(range((pbp_max_id or 0) + 1, gs_max_id + 1))
     summary_df = load_game_summary_df(season_id)
-    backfill_df = summary_df[summary_df["game_id"].isin(missing_ids)]
+
+    backfill_df = summary_df[
+        summary_df["game_id"].isin(game_ids)
+    ].copy()
 
     if backfill_df.empty:
         return
+
+    print(f"Fetching play-by-play for {len(backfill_df):,} game(s).")
 
     # ---- RAW FETCH ----
     pbp_updates = play_by_play_events(backfill_df)

@@ -39,13 +39,14 @@ from config import DB_PATH
 def run_step(name, fn, *, continue_on_error=False, **kwargs):
     print(f"\n▶ Running {name}")
     try:
-        fn(**kwargs)
+        result = fn(**kwargs)
         print(f"✅ {name} complete")
+        return result
     except Exception as e:
         print(f"❌ {name} failed: {e}")
         if not continue_on_error:
             raise
-
+        return None
 
 # ============================================================
 # Season Context Loader
@@ -114,9 +115,10 @@ def main():
         # ============================================================
         # Pipeline Steps
         # ============================================================
+        changed_games = None
 
         if not args.skip_game_summary:
-            run_step(
+            changed_games = run_step(
                 "Game Summary",
                 run_game_summary,
                 continue_on_error=args.continue_on_error,
@@ -126,16 +128,43 @@ def main():
                 con=con
             )
 
+
+        # ---------------------------------------------------------
+        # Determine whether game-dependent steps need to run
+        # ---------------------------------------------------------
+        if args.skip_game_summary:
+            has_game_changes = False
+            print("ℹ️ Game Summary skipped — downstream game-dependent steps will not run.")
+
+        elif changed_games is None:
+            has_game_changes = False
+            print("⚠️Game Summary did not return a result — downstream game-dependent steps will not run.")
+
+        elif changed_games.empty:
+            has_game_changes = False
+            print("ℹ️ No newly completed games detected — skipping downstream game-dependent steps.")
+
+        else:
+            has_game_changes = True
+            print(f"🔄 {len(changed_games)} newly completed game(s) detected.")
+
+        # ---------------------------------------------------------
+        # Play-by-Play
+        # ---------------------------------------------------------
         if not args.skip_pbp:
             run_step(
                 "Play-by-Play",
                 run_play_by_play,
                 continue_on_error=args.continue_on_error,
                 season_id=season["season_id"],
+                changed_games=changed_games,
                 con=con
             )
-
-        if not args.skip_goalie:
+            
+        # ---------------------------------------------------------
+        # Goalie Stats
+        # ---------------------------------------------------------
+        if not args.skip_goalie and has_game_changes:
             run_step(
                 "Goalie Stats",
                 run_goalie_stats,
@@ -143,8 +172,10 @@ def main():
                 season_id=season["season_id"],
                 con=con
             )
-
-        if not args.skip_special_teams:
+        # ---------------------------------------------------------
+        # Special Teams
+        # ---------------------------------------------------------
+        if not args.skip_special_teams and has_game_changes:
             run_step(
                 "Special Teams",
                 run_special_teams,
@@ -153,6 +184,10 @@ def main():
                 con=con
             )
 
+        # ---------------------------------------------------------
+        # Standings Snapshots
+        # ---------------------------------------------------------
+        # This always gets its own check in case it is a day off in the season
         if not args.skip_standings:
             run_step(
                 "Standings Snapshots",
