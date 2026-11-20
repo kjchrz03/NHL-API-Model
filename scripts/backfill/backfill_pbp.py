@@ -20,23 +20,45 @@ DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\data\duckdb\nh
 # ============================================================
 # SAFE REQUEST WITH BACKOFF
 # ============================================================
+# def safe_request(url, params=None, max_retries=5):
+#     delay = 1.0
+#     for _ in range(max_retries):
+#         try:
+#             r = requests.get(url, params=params, timeout=10)
+#             if r.status_code == 200:
+#                 return r
+#             if r.status_code == 429:
+#                 time.sleep(delay)
+#                 delay = min(delay * 2, 5)
+#                 continue
+#             return None
+#         except Exception:
+#             time.sleep(delay)
+#             delay = min(delay * 2, 5)
+#     return None
 def safe_request(url, params=None, max_retries=5):
     delay = 1.0
-    for _ in range(max_retries):
+
+    for attempt in range(1, max_retries + 1):
         try:
-            r = requests.get(url, params=params, timeout=10)
+            r = requests.get(url, params=params, timeout=30)
+
             if r.status_code == 200:
                 return r
-            if r.status_code == 429:
-                time.sleep(delay)
-                delay = min(delay * 2, 5)
-                continue
-            return None
-        except Exception:
-            time.sleep(delay)
-            delay = min(delay * 2, 5)
-    return None
 
+            print(f"    ⚠️ HTTP {r.status_code} | Attempt {attempt}/{max_retries}")
+
+            if r.status_code not in (429, 500, 502, 503, 504):
+                return None
+
+        except requests.RequestException as e:
+            print(f"    ⚠️ Request error: {e} | Attempt {attempt}/{max_retries}")
+
+        if attempt < max_retries:
+            time.sleep(delay)
+            delay = min(delay * 2, 10)
+
+    return None
 
 # ============================================================
 # LOADERS
@@ -191,7 +213,17 @@ def play_by_play_events(game_summary: pd.DataFrame, season_id: int) -> pd.DataFr
     for i, game_id in enumerate(all_game_ids, start=1):
         print(f"  🎯 [{i}/{total}] Fetching PBP for game_id={game_id}")
 
+        # df = process_game(game_id)
+
+        # if df.empty:
+        #     print(f"    ⚠️ No PBP returned for game_id={game_id}")
+        #     continue
+
+        # results.append(df)
         df = process_game(game_id)
+
+        # Pause between game requests, including failures
+        time.sleep(random.uniform(2.0, 4.0))
 
         if df.empty:
             print(f"    ⚠️ No PBP returned for game_id={game_id}")
@@ -328,12 +360,12 @@ def run_plays(con: duckdb.DuckDBPyConnection, season_id: int):
         print("⚠ No completed games.")
         return
     
-    existing_pbp = load_existing_pbp(con, season_id)
+#     existing_pbp = load_existing_pbp(con, season_id)
 
-    backfill_df = summary_df[
-        ~summary_df["game_id"].isin(existing_pbp)
-]
-
+#     backfill_df = summary_df[
+#         ~summary_df["game_id"].isin(existing_pbp)
+# ]
+    backfill_df = summary_df.copy()
     if backfill_df.empty:
         return
 
@@ -350,18 +382,47 @@ def run_plays(con: duckdb.DuckDBPyConnection, season_id: int):
     pbp_updates = enforce_pbp_schema(pbp_updates)
 
     # ---- UPSERT ----
+    # con.register("pbp_updates", pbp_updates)
+
+    # con.execute("""
+    #     DELETE FROM all_play_by_play
+    #     WHERE game_id IN (SELECT DISTINCT game_id FROM pbp_updates)
+    # """)
+
+    # con.execute("""
+    #     INSERT INTO all_play_by_play
+    #     SELECT * FROM pbp_updates
+    # """)
+    # ---- UPSERT (TRANSACTION SAFE) ----
     con.register("pbp_updates", pbp_updates)
 
-    con.execute("""
-        DELETE FROM all_play_by_play
-        WHERE game_id IN (SELECT DISTINCT game_id FROM pbp_updates)
-    """)
+    try:
+        con.begin()
 
-    con.execute("""
-        INSERT INTO all_play_by_play
-        SELECT * FROM pbp_updates
-    """)
+        con.execute("""
+            DELETE FROM all_play_by_play
+            WHERE game_id IN (
+                SELECT DISTINCT game_id
+                FROM pbp_updates
+            )
+        """)
 
+        con.execute("""
+            INSERT INTO all_play_by_play
+            SELECT * FROM pbp_updates
+        """)
+
+        con.commit()
+
+        print(f"✅ Inserted {len(pbp_updates):,} play-by-play rows.")
+
+    except Exception as e:
+        con.rollback()
+        print(f"❌ Play-by-play backfill failed: {e}")
+        raise
+
+    finally:
+        con.unregister("pbp_updates")
     print(f"Inserted {len(pbp_updates):,} play-by-play rows.")
 
 
@@ -374,7 +435,7 @@ if __name__ == "__main__":
 
     # for season_id in range(20232024+1):
     #     run_plays(con, season_id)
-    season_ids = [20252026]
+    season_ids = [20262027]
 
     for season_id in season_ids:
         run_plays(con, season_id)

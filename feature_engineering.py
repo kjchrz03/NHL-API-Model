@@ -1,5 +1,5 @@
 # ============================================================
-# Feature Engineering — Playoff Model (v5)
+# Feature Engineering — Playoff Model (v6)
 # ============================================================
 
 import pandas as pd
@@ -11,39 +11,31 @@ import numpy as np
 # ============================================================
 
 def normalize_made_playoffs(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
     if "made_playoffs" not in df.columns:
         return df
 
-    final_outcomes = (
-        df
-        .groupby(["season_id", "tri_code"])["made_playoffs"]
-        .apply(lambda s: 1 if (s == 1).any() else 0)
-        .reset_index()
-    )
+    df["made_playoffs"] = pd.to_numeric(
+        df["made_playoffs"],
+        errors="coerce",
+    ).astype("Int64")
 
-    return (
-        df
-        .drop(columns=["made_playoffs"])
-        .merge(final_outcomes, on=["season_id", "tri_code"], how="left")
-    )
-
-
+    return df
 def add_conference_baseline(df: pd.DataFrame) -> pd.DataFrame:
-    conference_sizes = (
-        df.groupby(["season_id", "conference"])["tri_code"]
-        .nunique()
-        .reset_index()
-        .rename(columns={"tri_code": "conference_team_count"})
-    )
+    df = df.copy()
 
-    df = df.merge(conference_sizes, on=["season_id", "conference"], how="left")
+    CONFERENCE_TEAM_COUNT = 16
+    CONFERENCE_PLAYOFF_SPOTS = 8
+
+    df["conference_team_count"] = CONFERENCE_TEAM_COUNT
 
     df["conf_playoff_chance_baseline"] = (
-        8 / df["conference_team_count"].replace(0, np.nan)
+        CONFERENCE_PLAYOFF_SPOTS
+        / CONFERENCE_TEAM_COUNT
     )
 
     return df
-
 
 def add_streak_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -211,13 +203,29 @@ def add_special_teams_features(df):
 # ============================================================
 # Season context
 # ============================================================
-
 def add_season_context(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    df["season_pct"] = df["games_played"] / 82
+    games_played = pd.to_numeric(
+        df["games_played"],
+        errors="coerce"
+    )
+
+    games_remaining = pd.to_numeric(
+        df["games_remaining"],
+        errors="coerce"
+    )
+
+    season_length = games_played + games_remaining
+
+    df["season_pct"] = (
+        games_played
+        / season_length.replace(0, np.nan)
+    ).clip(0, 1)
 
     return df
+
+
 
 def add_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()

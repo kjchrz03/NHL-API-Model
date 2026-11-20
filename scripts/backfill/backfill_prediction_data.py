@@ -11,67 +11,645 @@ pd.options.mode.chained_assignment = None
 
 DB_PATH = r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\data\duckdb\nhl_data.duckdb"
 
+def run_prediction_backfill(
+    con: duckdb.DuckDBPyConnection, 
+    season_id: int,) -> None:
 
-# ============================================================
-# LOADERS
-# ============================================================
-def load_game_summary_df(con, season_id: int) -> pd.DataFrame:
-    return con.execute(
-        """
+    print("\n==============================")
+    print(f"▶ Running prediction backfill for season {season_id}")
+    print("==============================\n")
+
+    # ------------------------------------------------------------
+    # 1. Load completed game summary
+    # ------------------------------------------------------------
+    game_summary = con.execute("""
         SELECT *
         FROM all_game_summary
         WHERE season_id = ?
           AND gameState = 'OFF'
         ORDER BY game_id
-        """,
-        [season_id],
-    ).df()
+    """, [season_id]).df()
 
+    if game_summary.empty:
+        print("⚠️ No completed games found.")
+        return
 
-def load_existing_predictions(con, season_id: int) -> set[int]:
-    rows = con.execute(
-        """
-        SELECT DISTINCT game_id
+    game_summary["game_date"] = pd.to_datetime(game_summary["game_date"])
+
+    # ------------------------------------------------------------
+    # 2. Find last game already calculated in BACKUP
+    # ------------------------------------------------------------
+    last_game_id = con.execute("""
+        SELECT MAX(game_id)
         FROM team_daily_stats
         WHERE season_id = ?
-        """,
-        [season_id],
-    ).fetchall()
-    return {r[0] for r in rows}
+    """, [season_id]).fetchone()[0]
+
+    if last_game_id is None:
+        print(f"🌱 No existing data found for {season_id}. Starting from beginning.")
+        backfill_df = game_summary.copy()
+    else:
+        last_game_id = int(last_game_id)
+        print(f"Last game in tmp: {last_game_id}")
+
+        backfill_df = game_summary[
+            game_summary["game_id"] > last_game_id
+        ].copy()
+        
+    # ------------------------------------------------------------
+    # 3. Select completed games AFTER backup checkpoint
+    # ------------------------------------------------------------
+    
+    if backfill_df.empty:
+        print("✅ No games need backfilling.")
+        return
+
+    game_ids = backfill_df["game_id"].astype(int).tolist()
+
+    min_game_id = int(backfill_df["game_id"].min())
+    max_game_id = int(backfill_df["game_id"].max())
+
+    min_day = backfill_df["game_date"].min().date()
+    max_day = backfill_df["game_date"].max().date()
+
+    print(
+        f"Backfill games: {backfill_df['game_id'].nunique()} "
+        f"({min_game_id} → {max_game_id})"
+    )
+    print(f"Backfill window: {min_day} → {max_day}")
+
+    # ------------------------------------------------------------
+    # 4. Load cumulative offsets from BACKUP
+    # ------------------------------------------------------------
+    offsets = load_prediction_offsets(
+        con,
+        season_id=season_id,
+        start_game_id=min_game_id,
+    )
+
+    print(f"Offsets loaded: {len(offsets)} teams")
+
+    # ------------------------------------------------------------
+    # 5. Build canonical games-played spine
+    # ------------------------------------------------------------
+    games_spine = build_games_played_spine(
+        backfill_df=backfill_df,
+        offsets=offsets,
+    )
+
+    print(f"Games spine rows: {len(games_spine)}")
+
+    # ------------------------------------------------------------
+    # 6. Load all source tables
+    # ------------------------------------------------------------
+    tables = fetch_tables(con, season_id)
+
+    # ------------------------------------------------------------
+    # 7. Filter game-based source tables
+    # ------------------------------------------------------------
+    def filter_to_games(df: pd.DataFrame, game_ids: list[int]) -> pd.DataFrame:
+        if "game_id" not in df.columns:
+            return df.copy()
+
+        return df[
+            pd.to_numeric(df["game_id"], errors="coerce").isin(game_ids)
+        ].copy()
+
+    for key in [
+        "play_by_play",
+        "goalie_stats",
+        "power_play",
+        "penalty_kill",
+    ]:
+        tables[key] = filter_to_games(tables[key], game_ids)
+    # ------------------------------------------------------------
+    # 8. Prepare standings
+    # ------------------------------------------------------------
+    standings = tables["daily_standings"].copy()
+
+    standings["game_date"] = pd.to_datetime(
+        standings["game_date"],
+        errors="coerce",
+    )
+
+    # Full-season standings history for point-in-time SOS
+    sos_standings = standings.copy()
+
+    # Backfill-window standings for final feature rows
+    tables["daily_standings"] = standings[
+        standings["game_date"].dt.date <= max_day
+    ].copy()
+    
+
+    # ------------------------------------------------------------
+    # 9. Debug source-table sizes
+    # ------------------------------------------------------------
+    print("\n========== SOURCE TABLE ROW COUNTS ==========")
+
+    for name, df in tables.items():
+        print(f"{name:<20} → {df.shape}")
+
+    print("============================================\n")
+    # ------------------------------------------------------------
+    # 10. Build strength of schedule
+    # ------------------------------------------------------------
+    print("▶ Building strength of schedule...")
+
+    games_sos = strength_of_schedule(
+        game_summary=game_summary,
+        sos_standings=sos_standings,
+    )
+
+    games_sos = games_sos[
+    games_sos["game_id"].isin(game_ids)
+    ].copy()
+
+    print(f"SOS rows: {len(games_sos)}")
+
+    # -------------------------------------------------
+    # Bootstrap SOS for teams with no prior games
+    # -------------------------------------------------
 
 
+    games_sos["sos_past"] = pd.to_numeric(
+        games_sos["sos_past"],
+        errors="coerce",
+    )
 
+    games_sos.loc[
+        games_sos["games_before"].eq(0),
+        "sos_past"
+    ] = 0.0
+
+    # Neutral SOS baseline when no opponent strength exists yet
+    games_sos["sos_future"] = pd.to_numeric(
+        games_sos["sos_future"],
+        errors="coerce",
+    )
+
+    games_sos.loc[
+        games_sos["sos_future"].isna()
+        & games_sos["games_before"].eq(0),
+        "sos_future"
+    ] = 0.500
+
+    print("▶ Building transition offense features...")
+    
+    # ------------------------------------------------------------
+    # 11. Build transition / shooting features
+    # ------------------------------------------------------------
+    print("▶ Building transition offense features...")
+
+    transition = build_transition_offense_features(
+        tables["play_by_play"],
+        games_spine=games_spine,
+        offsets=offsets,
+    )
+
+    cumulative_rush_stats = transition["cumulative_rush"]
+    cumulative_shooting_stats = transition["cumulative_shooting"]
+    cumulative_scoring = transition["cumulative_scoring"]
+    cumulative_shots_on_goal = transition["cumulative_sog"]
+
+    # ------------------------------------------------------------incomplete
+    # 12. Build goalie features
+    # ------------------------------------------------------------
+    print("▶ Building goalie features...")
+
+    teams = load_teams(con)
+
+    cumulative_goalie_stats = build_team_goalie_stats(
+        goalies=tables["goalie_stats"],
+        teams=teams,
+        games_spine=games_spine,
+    )
+
+    print(f"Goalie rows: {len(cumulative_goalie_stats)}")
+
+    print("\nANA GOALIE SOURCE CHECK:")
+
+    print("Raw goalie_stats:")
+
+    # ------------------------------------------------------------
+    # 13. Build special teams features
+    # ------------------------------------------------------------
+    print("▶ Building special teams features...")
+
+    special_teams = build_special_teams_stats(
+        power_play=tables["power_play"],
+        penalty_kill=tables["penalty_kill"],
+        games_spine=games_spine,
+        offsets=offsets,
+    )
+
+    print(f"Special teams rows: {len(special_teams)}")
+    # ------------------------------------------------------------
+    # 14. Build core feature dataframe
+    # ------------------------------------------------------------
+    print("▶ Building core feature dataframe...")
+   
+    core_df = build_core_df(
+        play_by_play=tables["play_by_play"],
+        backfill_df=backfill_df,
+        games_spine=games_spine,
+        games_sos=games_sos,
+        special_teams=special_teams,
+        cumulative_rush_stats=cumulative_rush_stats,
+        cumulative_shooting_stats=cumulative_shooting_stats,
+        cumulative_scoring=cumulative_scoring,
+        cumulative_shots_on_goal=cumulative_shots_on_goal,
+        cumulative_goalie_stats=cumulative_goalie_stats,
+        offsets=offsets,
+    )
+
+    print(f"Core rows: {len(core_df)}")
+
+    print("========================================\n")
+    print("\nWINS OFFSET CHECK:")
+
+    check_cols = [
+        "game_id",
+        "game_date",
+        "team_id",
+        "games_before",
+        "games_played",
+        "wins_before",
+        "game_wins",
+    ]
+
+    print(
+        core_df[
+            [c for c in check_cols if c in core_df.columns]
+        ]
+        .sort_values(["team_id", "game_date", "game_id"])
+        .head(1)
+        .to_string(index=False)
+    )
+    
+    # ------------------------------------------------------------
+    # 15. Merge standings
+    # ------------------------------------------------------------
+    final_df = build_final_df(
+        core_df=core_df,
+        standings=tables["daily_standings"],
+        teams=tables["teams"],
+    )
+    print(f"Final rows after standings: {len(final_df)}")
+
+    print("\nFINAL PREGAME STATE CHECK:")
+    print(
+        final_df[
+            [
+                "game_id",
+                "team_id",
+                "games_before",
+                "games_played",
+                "wins_before",
+            ]
+        ]
+        .sort_values(["team_id", "game_id"])
+        .head(1)
+        .to_string(index=False)
+    )
+    
+    standings_check_cols = [
+        "games_remaining",
+        "wins",
+        "wins_pctg",
+        "losses",
+        "ot_losses",
+        "rotw",
+        "rotw_pctg",
+        "rw",
+        "so_losses",
+        "so_wins",
+        "points",
+        "points_pct",
+        "projected_points",
+        "in_playoff_spot",
+        "gf_pctg",
+        "goal_diff",
+        "goal_diff_pctg",
+        "streak",
+        "streak_count",
+        "last_10_gp",
+        "last_10_wins",
+        "last_10_losses",
+        "last_10_otl",
+        "last_10_points",
+        "last_10_gf",
+        "last_10_ga",
+        "last_10_goal_diff",
+        "last_10_rotw",
+        "last_10_rw",
+        "home_gp",
+        "home_wins",
+        "home_losses",
+        "home_otlosses",
+        "home_rotw",
+        "home_rw",
+        "home_points",
+        "home_gf",
+        "home_ga",
+        "home_goal_diff",
+        "road_gp",
+        "road_wins",
+        "road_losses",
+        "road_ot_losses",
+        "road_rotw",
+        "road_rw",
+        "road_points",
+        "road_gf",
+        "road_ga",
+        "road_goal_diff",
+        "division",
+        "division_rank",
+        "division_home_rank",
+        "division_road_rank",
+        "division_last_10_rank",
+        "conference",
+        "conference_rank",
+        "conference_home_rank",
+        "conference_road_rank",
+        "conference_last_10_rank",
+        "league_rank",
+        "league_home_rank",
+        "league_road_rank",
+        "league_last_10_rank",
+        "wildcard_rank",
+        
+    ]
+    missing_standings_cols = [
+        c for c in standings_check_cols
+        if c not in final_df.columns
+    ]
+
+    print("\nMISSING STANDINGS COLUMNS:")
+    print(missing_standings_cols)
+
+    existing_standings_cols = [
+        c for c in standings_check_cols
+        if c in final_df.columns
+    ]
+
+    print("\nFINAL STANDINGS NULL CHECK:")
+    print(
+        final_df[existing_standings_cols]
+        .isna()
+        .sum()
+        .to_string()
+    )
+    print("\nFINAL STANDINGS NULL CHECK:")
+    print(
+        final_df[standings_check_cols]
+        .isna()
+        .sum()
+        .to_string()
+    )
+
+    print("\nFINAL SOS NULL CHECK:")
+    print(
+        final_df[
+            [
+                "sos_past",
+                "sos_future",
+            ]
+        ]
+        .isna()
+        .sum()
+        .to_string()
+    )
+
+    # ------------------------------------------------------------
+    # 16. Add derived / interaction features
+    # ------------------------------------------------------------
+    print("▶ Adding derived features...")
+
+    final_df = special_features(final_df)
+
+    # ------------------------------------------------------------
+    # 17. Enforce final schema
+    # ------------------------------------------------------------
+    print("▶ Enforcing final schema...")
+
+    final_df = enforce_data_schema(final_df)
+
+    print(f"Final schema rows: {len(final_df)}")
+
+
+    # ---------------------------------------------------------
+    # Debug checks
+    # ---------------------------------------------------------
+
+    derived_check_cols = [
+        "ot_wins",
+        "overtimes",
+        "ot_games_pct",
+        "pt_pct_x_sos",
+        "gd_x_rushdiff",
+        "pk_load_x_pk_pct",
+    ]
+
+    print("\nFINAL DERIVED FEATURE NULL CHECK:")
+    print(
+        final_df[derived_check_cols]
+        .isna()
+        .sum()
+        .to_string()
+    )
+
+
+    print("\nGAME WIN CHECK:")
+    print(final_df["game_win"].value_counts(dropna=False))
+
+    print("\nWINS PER GAME CHECK:")
+    print(
+        final_df.groupby("game_id")["game_win"]
+        .sum()
+        .value_counts()
+    )
+
+
+    # ------------------------------------------------------------
+    # 18. Validate backfill output
+    # ------------------------------------------------------------
+    print("▶ Validating backfill output...")
+
+    key_cols = ["season_id", "game_id", "team_id"]
+
+    # No duplicate team/game rows
+    dupes = final_df.duplicated(
+        subset=key_cols,
+        keep=False,
+    )
+
+    if dupes.any():
+        raise ValueError(
+            "Duplicate prediction rows found:\n"
+            + final_df.loc[
+                dupes,
+                key_cols,
+            ].to_string(index=False)
+        )
+
+    # Every game should have exactly 2 team rows
+    rows_per_game = (
+        final_df
+        .groupby(["season_id", "game_id"])
+        .size()
+    )
+
+    bad_games = rows_per_game[
+        rows_per_game != 2
+    ]
+
+    if not bad_games.empty:
+        raise ValueError(
+            "Games without exactly 2 team rows:\n"
+            + bad_games.to_string()
+        )
+   
+    # Every requested backfill game must be present
+    expected_games = set(game_ids)
+    actual_games = set(
+        final_df["game_id"]
+        .dropna()
+        .astype(int)
+    )
+
+    missing_games = expected_games - actual_games
+
+    if missing_games:
+        raise ValueError(
+            f"Missing backfill games: {sorted(missing_games)}"
+        )
+
+    # Keys cannot be null
+    if final_df[key_cols].isna().any().any():
+        raise ValueError(
+            "Null values found in prediction key columns."
+        )
+
+    print(
+        f"✅ Validation passed: "
+        f"{len(final_df)} rows / "
+        f"{final_df['game_id'].nunique()} games"
+    )
+    # ------------------------------------------------------------
+    # 19. Write validated backfill to team_daily_stats
+    # ------------------------------------------------------------
+    print("▶ Writing backfill to team_daily_stats...")
+    # ------------------------------------------------------------
+    # Verify backup table schema matches DATA_SCHEMA
+    # ------------------------------------------------------------
+    backup_cols = [
+        row[1]
+        for row in con.execute(
+            "PRAGMA table_info('team_daily_stats')"
+        ).fetchall()
+    ]
+
+    expected_cols = list(DATA_SCHEMA.keys())
+
+    missing_in_backup = [
+        col for col in expected_cols
+        if col not in backup_cols
+    ]
+
+    extra_in_backup = [
+        col for col in backup_cols
+        if col not in expected_cols
+    ]
+
+    if missing_in_backup:
+        raise ValueError(
+            f"Columns missing from team_daily_stats: "
+            f"{missing_in_backup}"
+        )
+
+    if extra_in_backup:
+        print(
+            f"⚠️ Extra columns in team_daily_stats "
+            f"(not being written): {extra_in_backup}"
+        )
+
+    print("✅ Backup table schema validated.")
+    con.register("prediction_updates", final_df)
+
+    try:
+        con.execute("BEGIN TRANSACTION")
+
+        con.execute("""
+            DELETE FROM team_daily_stats AS t
+            USING prediction_updates AS u
+            WHERE t.season_id = u.season_id
+            AND t.game_id = u.game_id
+            AND t.team_id = u.team_id
+        """)
+
+        columns = list(DATA_SCHEMA.keys())
+        column_sql = ", ".join(f'"{col}"' for col in columns)
+
+        con.execute(f"""
+            INSERT INTO team_daily_stats ({column_sql})
+            SELECT {column_sql}
+            FROM prediction_updates
+        """)
+
+        con.execute("COMMIT")
+
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+
+    finally:
+        con.unregister("prediction_updates")
+
+    print(
+        f"✅ Wrote {len(final_df)} rows to team_daily_stats."
+    )
 def load_teams(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+
     return con.execute("""
         SELECT team_id, tri_code
         FROM all_teams
     """).df()
-def add_opponent_team_id(df):
+
+
+def add_opponent_team_id(df: pd.DataFrame) -> pd.DataFrame:
+
     df = df.copy()
 
-    df = df.dropna(subset=["team_id", "home_team", "away_team"])
+    df = df.dropna(
+        subset=["team_id", "home_team", "away_team"]
+    )
 
     mask = df["team_id"].eq(df["home_team"])
 
     df["opponent_team_id"] = np.where(
         mask,
         df["away_team"],
-        df["home_team"]
+        df["home_team"],
     )
 
     return df
 
-    # ============================================================
-    # Fetch Data
-    # ============================================================
+
+# ============================================================
+# Fetch source data
+# ============================================================
+
 def fetch_tables(con: duckdb.DuckDBPyConnection, season_id: int) -> dict[str, pd.DataFrame]:
+
     print(f"📦 Loading tables for season {season_id}")
+
     tables: dict[str, pd.DataFrame] = {}
 
     tables["penalty_kill"] = con.execute("""
         SELECT pk.*, t.tri_code
         FROM all_pk pk
-        JOIN all_teams t ON t.team_id = pk.team_id
+        JOIN all_teams t
+            ON t.team_id = pk.team_id
         WHERE pk.season_id = ?
         ORDER BY pk.game_id
     """, [season_id]).df()
@@ -79,7 +657,8 @@ def fetch_tables(con: duckdb.DuckDBPyConnection, season_id: int) -> dict[str, pd
     tables["power_play"] = con.execute("""
         SELECT pp.*, t.tri_code
         FROM all_pp pp
-        JOIN all_teams t ON t.team_id = pp.team_id
+        JOIN all_teams t
+            ON t.team_id = pp.team_id
         WHERE pp.season_id = ?
         ORDER BY pp.game_id
     """, [season_id]).df()
@@ -102,25 +681,37 @@ def fetch_tables(con: duckdb.DuckDBPyConnection, season_id: int) -> dict[str, pd
         SELECT *
         FROM all_goalie_games
         WHERE season_id = ?
-        ORDER BY goalie_name
+        ORDER BY game_id
     """, [season_id]).df()
+    
+    tables["teams"] = con.execute("""
+        SELECT
+            team_id,
+            tri_code,
+            team_name
+        FROM all_teams
+        ORDER BY team_id
+    """).df()
 
     return tables
 
+
 # ============================================================
-# Load offsets for incremental (last row per team pre-window)
+# Load cumulative offsets from BACKUP
+# Last completed row per team before backfill begins
 # ============================================================
-# def load_prediction_offsets(season_id: int, start_game_id: int) -> pd.DataFrame:
+
 def load_prediction_offsets(
     con: duckdb.DuckDBPyConnection,
     season_id: int,
-    start_game_id: int
+    start_game_id: int,
 ) -> pd.DataFrame:
+
     q = """
         SELECT *
         FROM team_daily_stats
         WHERE season_id = ?
-            AND game_id < ?
+          AND game_id < ?
         QUALIFY
             ROW_NUMBER() OVER (
                 PARTITION BY team_id
@@ -128,47 +719,92 @@ def load_prediction_offsets(
             ) = 1
     """
 
-        
-    df = con.execute(q, [season_id, start_game_id]).df()
+    df = con.execute(
+        q,
+        [season_id, start_game_id],
+    ).df()
 
     if df.empty:
-        return pd.DataFrame(columns=["team_id", "games_played_offset"])
+        print("⚠️ No offset rows found in team_daily_stats.")
+
+        return pd.DataFrame(
+            columns=["team_id", "games_played_offset"]
+        )
 
     if "games_played" not in df.columns:
-        raise KeyError("team_daily_stats is missing games_played")
+        raise KeyError(
+            "team_daily_stats is missing games_played"
+        )
 
+    # ------------------------------------------------------------
+    # Canonical games-played offset
+    # ------------------------------------------------------------
     df["games_played_offset"] = (
-        pd.to_numeric(df["games_played"], errors="coerce")
+        pd.to_numeric(
+            df["games_played"],
+            errors="coerce",
+        )
         .fillna(0)
         .astype(int)
     )
 
-    KEY_COLS = {"season_id", "game_id", "team_id", "games_played", "games_played_offset"}
+    # ------------------------------------------------------------
+    # Rename cumulative values as offsets
+    # ------------------------------------------------------------
+    KEY_COLS = {
+        "season_id",
+        "game_id",
+        "team_id",
+        "games_played",
+        "games_played_offset",
+    }
 
-    df = df.rename(columns={c: f"{c}_offset" for c in df.columns if c not in KEY_COLS})
+    df = df.rename(
+        columns={
+            c: f"{c}_offset"
+            for c in df.columns
+            if c not in KEY_COLS
+        }
+    )
 
-    keep_cols = ["team_id"] + [c for c in df.columns if c.endswith("_offset")]
+    keep_cols = [
+        "team_id",
+        *[
+            c
+            for c in df.columns
+            if c.endswith("_offset")
+        ],
+    ]
+
     df = df.loc[:, keep_cols]
     df = df.loc[:, ~df.columns.duplicated()]
-    df = df.drop_duplicates(subset=["team_id"]).reset_index(drop=True)
+    df = df.drop_duplicates(
+        subset=["team_id"]
+    ).reset_index(drop=True)
 
     return df
 
+
 # ============================================================
-# Games played spine (canonical)
+# Games played spine
 # ============================================================
+
 def build_games_played_spine(
     backfill_df: pd.DataFrame,
     offsets: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+
     rows = []
+
     for _, row in backfill_df.iterrows():
+
         rows.append({
             "season_id": int(row["season_id"]),
             "game_id": int(row["game_id"]),
             "team_id": int(row["away_team"]),
             "game_date": pd.to_datetime(row["game_date"]),
         })
+
         rows.append({
             "season_id": int(row["season_id"]),
             "game_id": int(row["game_id"]),
@@ -177,26 +813,89 @@ def build_games_played_spine(
         })
 
     spine = pd.DataFrame(rows).sort_values(
-        ["season_id", "team_id", "game_date", "game_id"]
+        [
+            "season_id",
+            "team_id",
+            "game_date",
+            "game_id",
+        ]
     ).reset_index(drop=True)
 
-    spine["games_before_local"] = spine.groupby(["season_id", "team_id"], sort=False).cumcount()
-    spine["games_played_local"] = spine["games_before_local"] + 1
+    # ------------------------------------------------------------
+    # Games within this backfill window
+    # ------------------------------------------------------------
+    spine["games_before_local"] = (
+        spine
+        .groupby(
+            ["season_id", "team_id"],
+            sort=False,
+        )
+        .cumcount()
+    )
 
+    spine["games_played_local"] = (
+        spine["games_before_local"] + 1
+    )
+
+    # ------------------------------------------------------------
+    # Add historical games-played offset
+    # ------------------------------------------------------------
     spine["games_played_offset"] = 0
-    if offsets is not None and not offsets.empty and "games_played_offset" in offsets.columns:
-        off = offsets[["team_id", "games_played_offset"]].drop_duplicates("team_id")
-        spine = spine.merge(off, on="team_id", how="left", suffixes=("", "_off"))
-        spine["games_played_offset"] = spine["games_played_offset_off"].fillna(0).astype(int)
-        spine = spine.drop(columns=["games_played_offset_off"])
 
-    spine["games_before"] = spine["games_before_local"] + spine["games_played_offset"]
-    spine["games_played"] = spine["games_played_local"] + spine["games_played_offset"]
+    if (
+        offsets is not None
+        and not offsets.empty
+        and "games_played_offset" in offsets.columns
+    ):
+
+        off = (
+            offsets[
+                ["team_id", "games_played_offset"]
+            ]
+            .drop_duplicates("team_id")
+        )
+
+        spine = spine.merge(
+            off,
+            on="team_id",
+            how="left",
+            suffixes=("", "_off"),
+        )
+
+        spine["games_played_offset"] = (
+            spine["games_played_offset_off"]
+            .fillna(0)
+            .astype(int)
+        )
+
+        spine = spine.drop(
+            columns=["games_played_offset_off"]
+        )
+
+    # ------------------------------------------------------------
+    # Canonical games-before / games-played
+    # ------------------------------------------------------------
+    spine["games_before"] = (
+        spine["games_before_local"]
+        + spine["games_played_offset"]
+    )
+
+    spine["games_played"] = (
+        spine["games_played_local"]
+        + spine["games_played_offset"]
+    )
 
     return spine[
-        ["season_id", "game_id", "team_id", "game_date", "games_before", "games_played", "games_played_offset"]
+        [
+            "season_id",
+            "game_id",
+            "team_id",
+            "game_date",
+            "games_before",
+            "games_played",
+            "games_played_offset",
+        ]
     ]
-    
 
 # ============================================================
 # Schema enforcement (DuckDB-aligned)
@@ -405,21 +1104,6 @@ DATA_SCHEMA = {
 def enforce_data_schema(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # ============================================================
-    # ✅ SAFE OFFSET FETCH (fixes your crash)
-    # df.get("gp_offset", 0) returns an int if missing → no .fillna()
-    # ============================================================
-
-    if "gp_offset" in df.columns:
-        gp_offset = pd.to_numeric(df["gp_offset"], errors="coerce").fillna(0)
-    else:
-        gp_offset = pd.Series(0, index=df.index)
-
-    if "wins_offset" in df.columns:
-        wins_offset = pd.to_numeric(df["wins_offset"], errors="coerce").fillna(0)
-    else:
-        wins_offset = pd.Series(0, index=df.index)
-
 
     # ============================================================
     # ✅ STEP 1: FIX game_win
@@ -436,46 +1120,36 @@ def enforce_data_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 
     # ============================================================
-    # ✅ STEP 2: games_played + games_before WITH OFFSET
+    # STEP 2: Preserve canonical games_played / games_before
+    # These already come from games_spine and include the offset.
     # ============================================================
 
-    if "gp_cum" in df.columns:
-        df["games_played"] = (
-            pd.to_numeric(df["gp_cum"], errors="coerce").fillna(0)
-            + gp_offset
-        )
+    if "games_played" not in df.columns:
+        raise KeyError("games_played missing from canonical games spine")
 
-    elif "games_played" in df.columns:
-        df["games_played"] = (
-            pd.to_numeric(df["games_played"], errors="coerce").fillna(0)
-            + gp_offset
-        )
+    if "games_before" not in df.columns:
+        raise KeyError("games_before missing from canonical games spine")
 
-    else:
-        df["games_played"] = pd.Series(pd.NA, index=df.index)
+    df["games_played"] = pd.to_numeric(
+        df["games_played"], errors="coerce"
+    ).astype("Int64")
 
-    df["games_before"] = df["games_played"] - 1
+    df["games_before"] = pd.to_numeric(
+        df["games_before"], errors="coerce"
+    ).astype("Int64")
 
 
     # ============================================================
-    # ✅ STEP 3: wins_before WITH OFFSET
+    # STEP 3: Preserve canonical wins_before
     # ============================================================
 
-    if "wins_before" in df.columns:
-        df["wins_before"] = (
-            pd.to_numeric(df["wins_before"], errors="coerce").fillna(0)
-            + wins_offset
-        )
+    if "wins_before" not in df.columns:
+        raise KeyError("wins_before missing from final dataframe")
 
-    elif "wins_std" in df.columns:
-        df["wins_before"] = (
-            pd.to_numeric(df["wins_std"], errors="coerce").fillna(0)
-            - df["game_win"].fillna(0)
-            + wins_offset
-        )
-
-    else:
-        df["wins_before"] = wins_offset
+    df["wins_before"] = pd.to_numeric(
+        df["wins_before"],
+        errors="coerce",
+    ).astype("Int64")
 
 
     # ============================================================
@@ -491,56 +1165,33 @@ def enforce_data_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 
     # ============================================================
-    # ✅ STEP 5: SPECIAL TEAMS TOTALS + PER GAME FIX
+    # STEP 5: Preserve canonical special-teams features
+    # Cumulative values and offsets are handled upstream by
+    # build_special_teams_stats().
     # ============================================================
 
-    # ---- TIMES SH ----
-    if "times_sh" not in df.columns or df["times_sh"].isna().all():
-        df["times_sh"] = (
-            pd.to_numeric(df.get("c_times_sh", 0), errors="coerce")
-            - pd.to_numeric(df.get("c_times_sh_offset", 0), errors="coerce")
-        ).fillna(0)
+    special_teams_required = [
+        "times_sh",
+        "c_times_sh",
+        "times_sh_pg",
+        "pp_opp",
+        "c_pp_opps",
+        "pp_opp_pg",
+        "pp_net_g",
+        "c_pp_net_g",
+        "pp_net_pct",
+    ]
 
-    if "c_times_sh_offset" in df.columns:
-        df["c_times_sh"] = (
-            pd.to_numeric(df["times_sh"], errors="coerce").fillna(0).cumsum()
-            + pd.to_numeric(df["c_times_sh_offset"], errors="coerce").fillna(0)
+    missing_special_teams = [
+        col for col in special_teams_required
+        if col not in df.columns
+    ]
+
+    if missing_special_teams:
+        raise KeyError(
+            "Missing canonical special-teams columns: "
+            f"{missing_special_teams}"
         )
-
-    df["times_sh_pg"] = df["c_times_sh"] / df["games_played"]
-
-
-    # ---- PP OPP ----
-    if "pp_opp" not in df.columns or df["pp_opp"].isna().all():
-        df["pp_opp"] = (
-            pd.to_numeric(df.get("c_pp_opps", 0), errors="coerce")
-            - pd.to_numeric(df.get("c_pp_opps_offset", 0), errors="coerce")
-        ).fillna(0)
-
-    if "c_pp_opps_offset" in df.columns:
-        df["c_pp_opps"] = (
-            pd.to_numeric(df["pp_opp"], errors="coerce").fillna(0).cumsum()
-            + pd.to_numeric(df["c_pp_opps_offset"], errors="coerce").fillna(0)
-        )
-
-    df["pp_opp_pg"] = df["c_pp_opps"] / df["games_played"]
-
-
-    # ---- NET PP GOALS ----
-    if "pp_net_g" not in df.columns or df["pp_net_g"].isna().all():
-        df["pp_net_g"] = (
-            pd.to_numeric(df.get("c_pp_net_g", 0), errors="coerce")
-            - pd.to_numeric(df.get("c_pp_net_g_offset", 0), errors="coerce")
-        ).fillna(0)
-
-    if "c_pp_net_g_offset" in df.columns:
-        df["c_pp_net_g"] = (
-            pd.to_numeric(df["pp_net_g"], errors="coerce").fillna(0).cumsum()
-            + pd.to_numeric(df["c_pp_net_g_offset"], errors="coerce").fillna(0)
-        )
-
-    df["pp_net_pct"] = (df["c_pp_net_g"] / df["c_pp_opps"]) * 100
-
 
     # ============================================================
     # ✅ STEP 6: FINAL DUCKDB TYPE ENFORCEMENT
@@ -1098,15 +1749,12 @@ def build_team_shooting_stats(scoring_chances_events: pd.DataFrame) -> pd.DataFr
     df["hd_goal"] = ((df["goal"] == 1) & (df["hd_shot"] == 1)).astype(int)
     df["md_goal"] = ((df["goal"] == 1) & (df["md_shot"] == 1)).astype(int)
     df["ld_goal"] = ((df["goal"] == 1) & (df["ld_shot"] == 1)).astype(int)
-
-    teams_map = (
-        df[["game_id", "team_id"]].drop_duplicates()
-        .merge(df[["game_id", "team_id"]].drop_duplicates(), on="game_id", suffixes=("", "_opp"))
-        .query("team_id != team_id_opp")
-        .rename(columns={"team_id_opp": "opponent_team_id"})
-    )
-    df = df.merge(teams_map, on=["game_id", "team_id"], how="left")
-
+    
+    if "opponent_team_id" not in df.columns:
+        raise KeyError(
+            "opponent_team_id missing from scoring_chances_events"
+        )
+        
     stats_for = (
         df.groupby(["season_id", "game_id", "team_id"], as_index=False)
         .agg(
@@ -1219,10 +1867,24 @@ def build_transition_offense_features(
     rush_events, rush_stats = build_rush_stats(play_by_play)
     shot_stats, shot_events = extract_shot_attempts(play_by_play)
     # ✅ Attach canonical games_played spine BEFORE cumulative calcs
-    rush_stats = rush_stats.merge(
-        games_spine[["season_id", "game_id", "team_id", "games_played", "game_date"]],
-        on=["season_id", "game_id", "team_id"],
-        how="left"
+    rush_stats = games_spine[
+            ["season_id", "game_id", "team_id", "games_played", "game_date"]
+        ].merge(
+            rush_stats,
+            on=["season_id", "game_id", "team_id"],
+            how="left"
+        )
+
+    rush_cols = [
+        "rush_shots_for",
+        "rush_shots_against",
+        "rush_shot_differential",
+    ]
+
+    rush_stats[rush_cols] = (
+        rush_stats[rush_cols]
+        .fillna(0)
+        .astype(int)
     )
 
     shot_stats = shot_stats.merge(
@@ -1257,11 +1919,17 @@ def build_transition_offense_features(
     }
 
 # ============================================================
-# Strength of schedule (uses games_before)
+# Strength of schedule At this point in the season, based only on results that have already happened, how difficult is this team's remaining schedule?
 # ============================================================
-def strength_of_schedule(backfill_df: pd.DataFrame) -> pd.DataFrame:
+def strength_of_schedule(game_summary: pd.DataFrame, sos_standings: pd.DataFrame) -> pd.DataFrame:
+
     rows = []
-    for _, row in backfill_df.iterrows():
+
+    # ============================================================
+    # Build full historical schedule
+    # ============================================================
+    for _, row in game_summary.iterrows():
+
         rows.append({
             "season_id": int(row["season_id"]),
             "game_id": int(row["game_id"]),
@@ -1269,9 +1937,8 @@ def strength_of_schedule(backfill_df: pd.DataFrame) -> pd.DataFrame:
             "team_id": int(row["away_team"]),
             "tri_code": row["away_tri_code"],
             "opponent": row["home_tri_code"],
-            "goals_for": row["awayTeam.score"],
-            "goals_against": row["homeTeam.score"],
         })
+
         rows.append({
             "season_id": int(row["season_id"]),
             "game_id": int(row["game_id"]),
@@ -1279,67 +1946,183 @@ def strength_of_schedule(backfill_df: pd.DataFrame) -> pd.DataFrame:
             "team_id": int(row["home_team"]),
             "tri_code": row["home_tri_code"],
             "opponent": row["away_tri_code"],
-            "goals_for": row["homeTeam.score"],
-            "goals_against": row["awayTeam.score"],
         })
 
-    games_sos = pd.DataFrame(rows).sort_values(
-        ["season_id", "team_id", "game_date", "game_id"]
-    ).reset_index(drop=True)
+    games_sos = (
+        pd.DataFrame(rows)
+        .sort_values(["season_id", "team_id", "game_date", "game_id"])
+        .reset_index(drop=True)
+    )
 
-    games_sos["win"] = (games_sos["goals_for"] > games_sos["goals_against"]).astype(int)
-
+    # ============================================================
+    # Games played
+    # ============================================================
     g = games_sos.groupby(["season_id", "team_id"], sort=False)
+
     games_sos["games_before"] = g.cumcount()
     games_sos["games_played"] = games_sos["games_before"] + 1
 
-    games_sos["wins_before"] = g["win"].cumsum().shift(1).fillna(0)
-    games_sos["win_pct_before"] = np.where(
-        games_sos["games_before"] > 0,
-        games_sos["wins_before"] / games_sos["games_before"],
-        np.nan,
+    # ============================================================
+    # Historical standings matrix
+    # ============================================================
+    standings = sos_standings.copy()
+
+    standings["game_date"] = pd.to_datetime(
+        standings["game_date"],
+        errors="coerce",
+    ).dt.normalize()
+
+    standings["points_pct"] = pd.to_numeric(
+        standings["points_pct"],
+        errors="coerce",
     )
 
-    opp_win = (
-        games_sos[["season_id", "tri_code", "game_id", "win_pct_before"]]
-        .rename(columns={"tri_code": "opponent", "win_pct_before": "opponent_win_pct_before"})
+    standings_matrix = (
+        standings
+        .pivot_table(
+            index="game_date",
+            columns="tri_code",
+            values="points_pct",
+            aggfunc="last",
+        )
+        .sort_index()
+        .ffill()
     )
 
-    games_sos = games_sos.merge(
-        opp_win[["season_id", "opponent", "game_id", "opponent_win_pct_before"]],
-        on=["season_id", "opponent", "game_id"],
-        how="left",
+    # Complete calendar so previous-day lookup always works
+    full_dates = pd.date_range(
+        standings_matrix.index.min(),
+        standings_matrix.index.max(),
+        freq="D",
     )
 
-    # --- FIXED SOS CALCS ---
-
-    games_sos["sos_past"] = (
-        games_sos
-        .groupby(["season_id", "team_id"], group_keys=False)
-        .apply(lambda g: g.apply(
-            lambda row: g.loc[
-                g["game_date"] < row["game_date"],
-                "opponent_win_pct_before"
-            ].mean(),
-            axis=1
-        ))
+    standings_matrix = (
+        standings_matrix
+        .reindex(full_dates)
+        .ffill()
     )
 
-    games_sos["sos_future"] = (
-        games_sos
-        .groupby(["season_id", "team_id"], group_keys=False)
-        .apply(lambda g: g.apply(
-            lambda row: g.loc[
-                g["game_date"] > row["game_date"],
-                "opponent_win_pct_before"
-            ].mean(),
-            axis=1
-        ))
-    )
-
-    return games_sos.drop(columns=["goals_for", "goals_against", "opponent_win_pct_before"])
+    first_date = standings_matrix.index.min()
     
+    last_date = standings_matrix.index.max()
 
+    # ============================================================
+    # Point-in-time SOS
+    # ============================================================
+    def calc_team_sos(group: pd.DataFrame) -> pd.DataFrame:
+
+        group = (
+            group
+            .sort_values(["game_date", "game_id"])
+            .copy()
+        )
+
+        past_values = []
+        future_values = []
+
+        for i in range(len(group)):
+
+            current_date = pd.to_datetime(
+                group.iloc[i]["game_date"]
+            ).normalize()
+
+            # Use only standings known before this game
+            lookup_date = current_date - pd.Timedelta(days=1)
+
+            if lookup_date < first_date:
+                past_values.append(np.nan)
+                future_values.append(np.nan)
+                continue
+
+            if lookup_date > last_date:
+                lookup_date = last_date
+            # ----------------------------------------------------
+            # PAST SOS
+            #
+            # Opponents already played.
+            # Evaluate ALL of them using their CURRENT points_pct.
+            # ----------------------------------------------------
+            past_opponents = (
+                group.iloc[:i]["opponent"]
+                .dropna()
+                .tolist()
+            )
+
+            past_opponents = [
+                opp for opp in past_opponents
+                if opp in standings_matrix.columns
+            ]
+
+            if past_opponents:
+                past = pd.to_numeric(
+                    standings_matrix.loc[
+                        lookup_date,
+                        past_opponents,
+                    ],
+                    errors="coerce",
+                ).mean()
+            else:
+                past = np.nan
+
+            # ----------------------------------------------------
+            # FUTURE SOS
+            #
+            # Current opponent + remaining schedule.
+            #
+            # NO .unique() — repeated opponents count once
+            # for every remaining game.
+            # ----------------------------------------------------
+            future_opponents = (
+                group.iloc[i:]["opponent"]
+                .dropna()
+                .tolist()
+            )
+
+            future_opponents = [
+                opp for opp in future_opponents
+                if opp in standings_matrix.columns
+            ]
+
+            if future_opponents:
+                future = pd.to_numeric(
+                    standings_matrix.loc[
+                        lookup_date,
+                        future_opponents,
+                    ],
+                    errors="coerce",
+                ).mean()
+            else:
+                future = np.nan
+
+            past_values.append(past)
+            future_values.append(future)
+
+        group["sos_past"] = past_values
+        group["sos_future"] = future_values
+
+        return group
+
+    games_sos = (
+        games_sos
+        .groupby(
+            ["season_id", "team_id"],
+            group_keys=False,
+        )
+        .apply(calc_team_sos)
+        .reset_index(drop=True)
+    )
+
+    return games_sos[
+        [
+            "season_id",
+            "game_id",
+            "team_id",
+            "games_before",
+            "games_played",
+            "sos_past",
+            "sos_future",
+        ]
+    ]
 # ============================================================
 # Calculate Features from Goalie Stats
 # ============================================================
@@ -1441,6 +2224,7 @@ def build_team_goalie_stats(
         .sort_values(["season_id", "game_date", "game_id", "team_id"])
         .reset_index(drop=True)
     )
+
 # ============================================================
 # Calculate Features from Special Teams
 # ============================================================
@@ -1497,7 +2281,10 @@ def build_special_teams_stats(
 
     spine = spine.loc[:, [c for c in ["season_id", "game_id", "team_id", "game_date", "games_played"] if c in spine.columns]]
     spine = spine.drop_duplicates(subset=["season_id", "game_id", "team_id"])
-
+    
+    # Canonical games_played comes from games_spine
+    pp = pp.drop(columns=["games_played"], errors="ignore")
+    pk = pk.drop(columns=["games_played"], errors="ignore")
     # Merge spine and pp/pk with spine on season, game, and team_id
     if "game_date" not in pp.columns:
         pp = pp.merge(spine[["season_id", "game_id", "team_id", "game_date"]], on=["season_id", "game_id", "team_id"], how="left")
@@ -1776,6 +2563,8 @@ def build_special_teams_stats(
     return special_teams
 
 
+
+
 # ============================================================
 # Build Core Feature DF
 # ============================================================
@@ -1791,13 +2580,23 @@ def build_core_df(
     cumulative_scoring: pd.DataFrame,
     cumulative_shots_on_goal: pd.DataFrame,
     cumulative_goalie_stats: pd.DataFrame,
+    offsets: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
 
     # -------------------------------------------------
     # Canonical game × team spine
     # -------------------------------------------------
     games = (
-        games_spine[["season_id", "game_id", "team_id", "game_date", "games_played"]]
+        games_spine[
+            [
+                "season_id",
+                "game_id",
+                "team_id",
+                "game_date",
+                "games_before",
+                "games_played",
+            ]
+        ]
         .drop_duplicates()
         .sort_values(["season_id", "game_date", "game_id", "team_id"])
         .reset_index(drop=True)
@@ -1815,6 +2614,9 @@ def build_core_df(
                     df[base] = df[col].combine_first(df[other])
                     df = df.drop(columns=[col, other])
         return df
+
+
+
 
     def drop_structural_cols(df: pd.DataFrame) -> pd.DataFrame:
         STRUCTURAL = {
@@ -1865,7 +2667,7 @@ def build_core_df(
         )
         .merge(
             cumulative_goalie_stats[
-                ["season_id", "game_id", "team_id", "game_savePct", "game_GAA"]
+                ["season_id", "game_id", "team_id", "game_savePct", "game_GAA", "game_wins"]
             ],
             on=["season_id", "game_id", "team_id"],
             how="inner",
@@ -1893,13 +2695,77 @@ def build_core_df(
     )
 
     core_df = coalesce_duplicates(core_df)
+    core_df["game_win"] = (
+        pd.to_numeric(
+            core_df["game_wins"],
+            errors="coerce",
+        )
+        .fillna(0)
+        .astype("Int64")
+    )
+
+    # -------------------------------------------------
+    # Canonical wins_before
+    # backup wins + wins from earlier backfill games
+    # -------------------------------------------------
+
+    # wins_offset = (
+    #     offsets[["team_id", "wins_before_offset"]]
+    #     .drop_duplicates("team_id")
+    #     .copy()
+    # )
+    if (offsets is not None
+        and not offsets.empty
+        and "wins_before_offset" in offsets.columns
+    ):
+        wins_offset = (
+            offsets[["team_id", "wins_before_offset"]]
+            .drop_duplicates("team_id")
+            .copy()
+        )
+    else:
+        wins_offset = pd.DataFrame(
+            columns=["team_id", "wins_before_offset"]
+        )
+
+    wins_offset["wins_before_offset"] = pd.to_numeric(
+        wins_offset["wins_before_offset"],
+        errors="coerce",
+    ).fillna(0)
+
+    core_df = core_df.merge(
+        wins_offset,
+        on="team_id",
+        how="left",
+    )
+
+    core_df["wins_before_offset"] = (
+        core_df["wins_before_offset"]
+        .fillna(0)
+    )
+
+    core_df = core_df.sort_values(
+        ["season_id", "team_id", "game_date", "game_id"]
+    )
+
+    core_df["wins_before"] = (
+        core_df["wins_before_offset"]
+        + core_df.groupby(
+            ["season_id", "team_id"],
+            sort=False,
+        )["game_wins"].cumsum()
+        - core_df["game_wins"]
+        )
+            
+    core_df = core_df.drop(columns=["wins_before_offset"])
+    
     # print("Core:", core_df[core_df['team_id']==6])
     return (
         core_df
         .sort_values(["season_id", "game_date", "game_id", "team_id"])
         .reset_index(drop=True)
     )
-
+   
 # ============================================================
 # Build Final DF (join standings correctly)
 # ============================================================
@@ -1907,117 +2773,428 @@ def build_core_df(
 def build_final_df(
     core_df: pd.DataFrame,
     standings: pd.DataFrame,
+    teams: pd.DataFrame,
 ) -> pd.DataFrame:
 
     core = core_df.copy()
-    std  = standings.copy()
+    std = standings.copy()
+    teams = teams.copy()
+    print("tri_code in core_df:", "tri_code" in core_df.columns)
+    print("team_name in core_df:", "team_name" in core_df.columns)
 
+    if "tri_code" in core_df.columns:
+        print("core_df tri_code nulls:", core_df["tri_code"].isna().sum())
+
+    if "team_name" in core_df.columns:
+        print("core_df team_name nulls:", core_df["team_name"].isna().sum())
     print("▶ Merging standings → final_df...")
 
     # -------------------------------------------------
     # 1. Ensure datetime + clean dtypes
     # -------------------------------------------------
-    core["game_date"] = pd.to_datetime(core["game_date"], errors="coerce")
-    std["game_date"]  = pd.to_datetime(std["game_date"], errors="coerce")
+    core["game_date"] = pd.to_datetime(
+        core["game_date"],
+        errors="coerce",
+    )
+
+    std["game_date"] = pd.to_datetime(
+        std["game_date"],
+        errors="coerce",
+    )
 
     core["season_id"] = core["season_id"].astype(int)
-    std["season_id"]  = std["season_id"].astype(int)
+    std["season_id"] = std["season_id"].astype(int)
 
     core["team_id"] = core["team_id"].astype(int)
-    std["team_id"]  = std["team_id"].astype(int)
+    std["team_id"] = std["team_id"].astype(int)
 
     # -------------------------------------------------
     # 2. Rename standings date → snapshot_date
     # -------------------------------------------------
-    std = std.rename(columns={"game_date": "snapshot_date"})
+    std = std.rename(
+        columns={"game_date": "snapshot_date"}
+    )
 
     # -------------------------------------------------
     # 3. Force identical datetime64[ns]
     # -------------------------------------------------
-    core["game_date"] = core["game_date"].astype("datetime64[ns]")
-    std["snapshot_date"] = std["snapshot_date"].astype("datetime64[ns]")
+    core["game_date"] = core["game_date"].astype(
+        "datetime64[ns]"
+    )
+
+    std["snapshot_date"] = std["snapshot_date"].astype(
+        "datetime64[ns]"
+    )
 
     # -------------------------------------------------
-    # 4. Build GAME-LEVEL spine (1 row per team/game)
-    #    ✅ merge_asof requires global monotonic sorting
+    # 4. Build GAME-LEVEL spine
+    #    1 row per team/game
+    #    merge_asof requires global monotonic sorting
     # -------------------------------------------------
     core_games = (
-        core[["season_id", "team_id", "game_id", "game_date"]]
+        core[
+            [
+                "season_id",
+                "team_id",
+                "game_id",
+                "game_date",
+            ]
+        ]
         .drop_duplicates()
-        .sort_values(["game_date", "season_id", "team_id"])  # ✅ DATE FIRST
+        .sort_values(
+            [
+                "game_date",
+                "season_id",
+                "team_id",
+            ]
+        )
         .reset_index(drop=True)
+    )
+    
+    # -------------------------------------------------
+    # 4a. Add stable team identity
+    # -------------------------------------------------
+
+    teams["team_id"] = teams["team_id"].astype(int)
+
+    core_games = core_games.merge(
+        teams[
+            [
+                "team_id",
+                "tri_code",
+                "team_name",
+            ]
+        ],
+        on="team_id",
+        how="left",
+        validate="many_to_one",
+    )
+
+    missing_identity = core_games[
+        core_games[
+            ["tri_code", "team_name"]
+        ].isna().any(axis=1)
+    ]
+
+    if not missing_identity.empty:
+        missing_ids = (
+            missing_identity["team_id"]
+            .drop_duplicates()
+            .tolist()
+        )
+
+        raise ValueError(
+            f"❌ Missing team identity for team_ids: {missing_ids}"
+        )
+
+    print(
+        "Team identity nulls:",
+        core_games[
+            ["tri_code", "team_name"]
+        ].isna().sum().to_dict()
     )
 
     # -------------------------------------------------
     # 5. Deduplicate standings snapshots
-    #    (one row per team per snapshot_date)
+    #    One row per team per snapshot_date
     # -------------------------------------------------
     std = (
-        std.drop_duplicates(subset=["season_id", "team_id", "snapshot_date"])
-        .sort_values(["snapshot_date", "season_id", "team_id"])  # ✅ DATE FIRST
+        std
+        .drop_duplicates(
+            subset=[
+                "season_id",
+                "team_id",
+                "snapshot_date",
+            ]
+        )
+        .sort_values(
+            [
+                "snapshot_date",
+                "season_id",
+                "team_id",
+            ]
+        )
         .reset_index(drop=True)
     )
 
-
     # -------------------------------------------------
-    # 6. Debug safety checks (optional)
+    # 6. Debug safety checks
     # -------------------------------------------------
     if not core_games["game_date"].is_monotonic_increasing:
-        raise ValueError("❌ core_games game_date is not globally sorted!")
+        raise ValueError(
+            "❌ core_games game_date is not globally sorted!"
+        )
 
     if not std["snapshot_date"].is_monotonic_increasing:
-        raise ValueError("❌ standings snapshot_date is not globally sorted!")
+        raise ValueError(
+            "❌ standings snapshot_date is not globally sorted!"
+        )
 
     # -------------------------------------------------
-    # 7. ✅ Merge standings snapshot BEFORE each game
-    #    Each game gets the most recent daily standings row
+    # 7. Merge standings snapshot BEFORE each game
     # -------------------------------------------------
+    print("\nCORE GAMES:")
+
+    print(
+        core_games[
+            [
+                "season_id",
+                "game_id",
+                "game_date",
+                "team_id",
+            ]
+        ]
+        .head(1)
+        .to_string(index=False)
+    )
+
+    print("\nCORE GAMES DTYPES:")
+
+    print(
+        core_games[
+            [
+                "season_id",
+                "game_date",
+                "team_id",
+            ]
+        ].dtypes
+    )
+
+    print(
+        "\nStandings snapshot range:",
+        std["snapshot_date"].min(),
+        "→",
+        std["snapshot_date"].max(),
+    )
+
+    print("\nSTANDINGS STD DTYPES:")
+
+    print(
+        std[
+            [
+                c
+                for c in [
+                    "season_id",
+                    "snapshot_date",
+                    "team_id",
+                    "tri_code",
+                ]
+                if c in std.columns
+            ]
+        ].dtypes
+    )
+    
+    # ============================================================
+    # DEBUG — standings coverage for BOS 2018-19
+    # ============================================================
+
+    bos_core = core_games[
+        (core_games["season_id"] == 20182019)
+        & (core_games["team_id"] == 6)
+    ].sort_values(["game_date", "game_id"])
+
+    bos_standings = std[
+        (std["season_id"] == 20182019)
+        & (std["team_id"] == 6)
+    ].sort_values("snapshot_date")
+
+    print("\n==============================")
+    print("BOS CORE GAME DATES")
+    print("==============================")
+
+    print(
+        bos_core[
+            ["game_id", "game_date", "team_id"]
+        ].head(10).to_string(index=False)
+    )
+
+    print("\n==============================")
+    print("BOS STANDINGS SNAPSHOTS")
+    print("==============================")
+
+    print(
+        bos_standings[
+            ["snapshot_date", "team_id", "tri_code"]
+        ].head(10).to_string(index=False)
+    )
+
+    std = std.drop(
+        columns=["tri_code", "team_name"],
+        errors="ignore",
+    )
+
     standings_game_spine = pd.merge_asof(
         core_games,
         std,
         left_on="game_date",
         right_on="snapshot_date",
         by=["season_id", "team_id"],
-        direction="backward"
+        direction="backward",
+        allow_exact_matches=True,
     )
 
+    # -------------------------------------------------
+    # Streak baseline
+    # -------------------------------------------------
+    if "streak" in standings_game_spine.columns:
+        standings_game_spine["streak"] = (
+            standings_game_spine["streak"]
+            .fillna("NONE")
+        )
+
+    if "streak_count" in standings_game_spine.columns:
+        standings_game_spine["streak_count"] = (
+            pd.to_numeric(
+                standings_game_spine["streak_count"],
+                errors="coerce",
+            )
+            .fillna(0)
+            .astype("Int64")
+        )
+
+    # -------------------------------------------------
+    # Static team attributes for season-opening rows
+    # Division/conference do not depend on game results
+    # -------------------------------------------------
+    team_alignment = (
+        std
+        .sort_values("snapshot_date")
+        .drop_duplicates(
+            subset=[
+                "season_id",
+                "team_id",
+            ],
+            keep="first",
+        )
+        [
+            [
+                "season_id",
+                "team_id",
+                "division",
+                "conference",
+            ]
+        ]
+        .rename(
+            columns={
+                "division": "opening_division",
+                "conference": "opening_conference",
+            }
+        )
+    )
+
+    standings_game_spine = standings_game_spine.merge(
+        team_alignment,
+        on=[
+            "season_id",
+            "team_id",
+        ],
+        how="left",
+    )
+
+      
+ 
+    # -------------------------------------------------
+    # Actual regular-season length by team
+    #
+    # This avoids assuming every season has 82 games.
+    # It also handles seasons where individual teams
+    # finished with different numbers of games.
+    # -------------------------------------------------
+        # Actual regular-season length by team
+    
+
+    print("\nSTANDINGS GAME COLUMNS:")
+
+    print(
+        [
+            c
+            for c in standings_game_spine.columns
+            if "game" in c.lower()
+        ]
+    )
+
+    print("\nSTANDINGS MERGE CHECK:")
+
+    print(
+        standings_game_spine[
+            [
+                "game_id",
+                "game_date",
+                "team_id",
+                "snapshot_date",
+                "games_played",
+                "wins",
+                "points",
+                "points_pct",
+            ]
+        ]
+        .head(1)
+        .to_string(index=False)
+    )
 
     # -------------------------------------------------
     # 8. Merge spine back into full core_df
     # -------------------------------------------------
     final_updates = core.merge(
-        standings_game_spine.drop(columns=["snapshot_date"]),
-        on=["season_id", "team_id", "game_id", "game_date"],
+        standings_game_spine.drop(
+            columns=["snapshot_date"]
+        ),
+        on=[
+            "season_id",
+            "team_id",
+            "game_id",
+            "game_date",
+        ],
         how="inner",
-        suffixes=("", "_std")
+        suffixes=("", "_std"),
     )
 
     # -------------------------------------------------
     # 9. Clean up duplicate columns (_x/_y merges)
     # -------------------------------------------------
-    def coalesce_dupes(df: pd.DataFrame) -> pd.DataFrame:
+    def coalesce_dupes(
+        df: pd.DataFrame,
+    ) -> pd.DataFrame:
+
         for col in list(df.columns):
             if col.endswith("_x"):
                 base = col[:-2]
                 other = f"{base}_y"
+
                 if other in df.columns:
-                    df[base] = df[col].combine_first(df[other])
-                    df = df.drop(columns=[col, other])
+                    df[base] = (
+                        df[col]
+                        .combine_first(df[other])
+                    )
+
+                    df = df.drop(
+                        columns=[
+                            col,
+                            other,
+                        ]
+                    )
+
         return df
 
-    final_updates = coalesce_dupes(final_updates)
-    
-    # print("final updates df",final_updates[final_updates['team_id']==6])
-    
+    final_updates = coalesce_dupes(
+        final_updates
+    )
+
     # -------------------------------------------------
     # 10. Return final sorted dataset
     # -------------------------------------------------
     return (
         final_updates
-        .sort_values(["season_id", "game_date", "game_id", "team_id"])
+        .sort_values(
+            [
+                "season_id",
+                "game_date",
+                "game_id",
+                "team_id",
+            ]
+        )
         .reset_index(drop=True)
     )
-
 
 # ============================================================
 # Derived / Interaction Features
@@ -2043,550 +3220,107 @@ def special_features(final_updates: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-# # ============================================================
-# # Execution
-# # ============================================================
-# def run_prediction_backfill(con: duckdb.DuckDBPyConnection, season_id: int):
-
-#     print(f"\n🏒 Backfilling prediction data for {season_id}")
-
-#     summary_df = load_game_summary_df(con, season_id)
-
-#     if summary_df.empty:
-#         print("⚠ No completed games.")
-#         return
-    
-#     print("Running strength of schedule data...")
-#     games_sos = strength_of_schedule(summary_df)
-    
-#     existing_prediction_data = load_existing_predictions(con, season_id)
-
-#     backfill_df = summary_df[
-#         ~summary_df["game_id"].isin(existing_prediction_data)
-#     ]
-
-#     if backfill_df.empty:
-#         return
-
-#     missing_ids = backfill_df["game_id"].tolist()
-
-#     # ============================================================
-#     # 2. Load season tables
-#     # ============================================================
-#     print("📥 Loading tables...")
-#     tables = fetch_tables(con, season_id)
-
-#     # ============================================================
-#     # 3. Filter all tables to backfill games
-#     # ============================================================
-#     def filter_to_games(df: pd.DataFrame, game_ids: list[int]) -> pd.DataFrame:
-#         if "game_id" not in df.columns:
-#             return df
-#         return df[df["game_id"].isin(game_ids)]
-
-#     for key in [
-#         "play_by_play",
-#         "goalie_stats",
-#         "power_play",
-#         "penalty_kill",
-#         "daily_standings",
-#     ]:
-#         tables[key] = filter_to_games(tables[key], missing_ids)
-
-#     # ============================================================
-#     # 4. Transition / Rush / Shot features
-#     # ============================================================
-#     print("Running rush data...")
-
-#     play_by_play = tables["play_by_play"]
-    
-#     mask = play_by_play["team_id"].eq(play_by_play["home_team"], fill_value=False)
-
-#     play_by_play["opponent_team_id"] = np.where(
-#         mask,
-#         play_by_play["away_team"],
-#         play_by_play["home_team"]
-#     )
-#     # ------------------------------------------------------------
-#     # Build opponent_team_id (correctly)
-#     # ------------------------------------------------------------
-#     teams_per_game = (
-#         games_sos[["season_id", "game_id", "team_id"]]
-#         .drop_duplicates()
-#     )
-
-#     # self join to get opponent
-#     opp_map = teams_per_game.merge(
-#         teams_per_game,
-#         on=["season_id", "game_id"],
-#         suffixes=("", "_opp")
-#     )
-
-#     # remove same-team rows
-#     opp_map = opp_map[opp_map["team_id"] != opp_map["team_id_opp"]]
-
-#     opp_map = opp_map.rename(columns={
-#         "team_id": "team_id",
-#         "team_id_opp": "opponent_team_id"
-#     })
-
-#     # merge into play_by_play
-#     play_by_play = play_by_play.merge(
-#         opp_map,
-#         on=["season_id", "game_id", "team_id"],
-#         how="left"
-#     )
-#     games_spine = build_games_played_spine(backfill_df)
-
-#     transition_features = build_transition_offense_features(
-#         play_by_play,
-#         games_spine  
-#     )
-
-#     cumulative_rush_stats     = transition_features["cumulative_rush"]
-#     cumulative_shooting_stats = transition_features["cumulative_shooting"]
-#     cumulative_scoring        = transition_features["cumulative_scoring"]
-#     cumulative_shots_on_goal  = transition_features["cumulative_sog"]
-
-#     # ============================================================
-#     # 5. Strength of Schedule (FULL SEASON)
-#     # ============================================================
-#     # print("Running strength of schedule data...")
-#     # games_sos = strength_of_schedule(summary_df)
-
-#     # ============================================================
-#     # 6. Goalie stats
-#     # ============================================================
-#     print("Running goalie data...")
-#     goalies = tables["goalie_stats"]
-#     teams   = load_teams(con)
-
-#     cumulative_goalie_stats = build_team_goalie_stats(goalies, teams)
-
-#     # ============================================================
-#     # 7. Special teams
-#     # ============================================================
-#     print("Running special teams data...")
-#     penalty_kill = tables["penalty_kill"]
-#     power_play   = tables["power_play"]
-
-#     special_teams = build_special_teams_stats(power_play, penalty_kill)
-
-#     # ============================================================
-#     # 8. Build final feature frame
-#     # ============================================================
-#     print("Running final updates merging...")
-
-#     core_df = build_core_df(
-#         play_by_play=play_by_play,
-#         backfill_df=backfill_df,
-#         games_sos=games_sos,
-#         special_teams=special_teams,
-#         cumulative_rush_stats=cumulative_rush_stats,
-#         cumulative_shooting_stats=cumulative_shooting_stats,
-#         cumulative_scoring=cumulative_scoring,
-#         cumulative_shots_on_goal=cumulative_shots_on_goal,
-#         cumulative_goalie_stats=cumulative_goalie_stats,
-#     )
-
-#     final_updates = build_final_df(
-#         core_df=core_df,
-#         standings=tables["daily_standings"]
-#     )
-
-#     # ============================================================
-#     # 9. Derived / interaction features
-#     # ============================================================
-#     prediction_data_updates = special_features(final_updates)
-
-#     if prediction_data_updates.empty:
-#         print(prediction_data_updates.tail())
-#         return
-
-#     # ============================================================
-#     # 10. Enforce schema
-#     # ============================================================
-#     prediction_data_updates = enforce_data_schema(prediction_data_updates)
-
-#     # ============================================================
-#     # 11. Upsert into prediction_data
-#     # ============================================================
-#     con.register("prediction_data_updates", prediction_data_updates)
-
-#     con.execute("""
-#         DELETE FROM prediction_data
-#         WHERE (game_id, team_id) IN (
-#             SELECT game_id, team_id
-#             FROM prediction_data_updates
-#         )
-#     """)
-
-#     con.execute("""
-#         INSERT INTO prediction_data
-#         SELECT *
-#         FROM prediction_data_updates
-#     """)
-
-#     print(f"Inserted {len(prediction_data_updates):,} Prediction data rows.")
-
-def run_prediction_backfill(
-    con: duckdb.DuckDBPyConnection,
-    season_id: int,
-) -> None:
-
-    print("\n==============================")
-    print(f"▶ Running prediction backfill for season {season_id}")
-    print("==============================\n")
-
-    # ------------------------------------------------------------
-    # 1. Load completed game summary
-    # ------------------------------------------------------------
-    game_summary = con.execute("""
-        SELECT *
-        FROM all_game_summary
-        WHERE season_id = ?
-        AND gameState = 'OFF'
-        ORDER BY game_id
-    """, [season_id]).df()
-
-    if game_summary.empty:
-        print("⚠️ No completed games found in all_game_summary.")
-        return
-
-    # ------------------------------------------------------------
-    # ✅ 2. FORCE DATE-BASED BACKFILL WINDOW (EDIT THESE)
-    # ------------------------------------------------------------
-    game_summary["game_date"] = pd.to_datetime(game_summary["game_date"])
-
-    # 🔥 OPTION: full season (safe default)
-    backfill_df = game_summary.copy()
-
-    # 🔥 OPTIONAL: uncomment to limit window
-    # start_date = pd.to_datetime("2013-10-01")
-    # end_date   = pd.to_datetime("2014-04-15")
-    # backfill_df = game_summary[
-    #     (game_summary["game_date"] >= start_date) &
-    #     (game_summary["game_date"] <= end_date)
-    # ].copy()
-
-    if backfill_df.empty:
-        print("⚠️ No games found in selected backfill window.")
-        return
-
-    print(f"Backfill games found: {backfill_df['game_id'].nunique()}")
-
-    # ------------------------------------------------------------
-    # 3. Canonical date window
-    # ------------------------------------------------------------
-    min_day = backfill_df["game_date"].min().date()
-    max_day = backfill_df["game_date"].max().date()
-
-    print(f"Backfill window: {min_day} → {max_day}")
-
-    game_ids = backfill_df["game_id"].tolist()
-
-    # ------------------------------------------------------------
-    # 4. Load offsets
-    # ------------------------------------------------------------
-    # offsets = load_prediction_offsets(
-    #     season_id=season_id,
-    #     start_game_id=int(backfill_df["game_id"].min()),
-    # )
-
-    offsets = load_prediction_offsets(
-        con,
-        season_id=season_id,
-        start_game_id=int(backfill_df["game_id"].min()),
-    )
-    print(f"Offsets loaded: {len(offsets)} teams")
-
-    # ------------------------------------------------------------
-    # 5. Build game spine
-    # ------------------------------------------------------------
-    games_spine = build_games_played_spine(
-        backfill_df=backfill_df,
-        offsets=offsets,
-    )
-
-    print(f"Games spine rows: {len(games_spine)}")
-
-    # ------------------------------------------------------------
-    # 6. Load source tables
-    # ------------------------------------------------------------
-    tables = fetch_tables(con, season_id)
-
-    # ------------------------------------------------------------
-    # 7. Safe filtering helper
-    # ------------------------------------------------------------
-    def filter_table(df, game_ids, min_day, max_day):
-
-        if "game_id" in df.columns:
-            return df[df["game_id"].isin(game_ids)]
-
-        if "game_date" in df.columns:
-            d = pd.to_datetime(df["game_date"], errors="coerce").dt.date
-            return df[d.between(min_day, max_day)]
-
-        return df
-
-    # ------------------------------------------------------------
-    # 8. Filter tables
-    # ------------------------------------------------------------
-    for k in tables:
-        if k == "daily_standings":
-            continue
-        tables[k] = filter_table(tables[k], game_ids, min_day, max_day)
-
-    # ------------------------------------------------------------
-    # 9. Filter standings
-    # ------------------------------------------------------------
-    tables["daily_standings"]["game_day"] = (
-        pd.to_datetime(tables["daily_standings"]["game_date"], errors="coerce").dt.date
-    )
-
-    tables["daily_standings"] = tables["daily_standings"][
-        tables["daily_standings"]["game_day"].between(min_day, max_day)
-    ].drop(columns=["game_day"])
-
-    # ------------------------------------------------------------
-    # ✅ DEBUG: table sizes
-    # ------------------------------------------------------------
-    print("\n========== SOURCE TABLE ROW COUNTS ==========")
-    for name, df in tables.items():
-        print(f"{name:<20} → {df.shape}")
-    print("============================================\n")
-    # ------------------------------------------------------------
-    # 🔥 CLEAN + STANDARDIZE play_by_play
-    # ------------------------------------------------------------
-    pbp = tables["play_by_play"].copy()
-
-    # Drop rows missing key fields (prevents NA boolean crash)
-    pbp = pbp.dropna(subset=["team_id", "home_team", "away_team"])
-
-    # Ensure consistent dtype
-    pbp["team_id"] = pbp["team_id"].astype("int64")
-    pbp["home_team"] = pbp["home_team"].astype("int64")
-    pbp["away_team"] = pbp["away_team"].astype("int64")
-
-    # ✅ Single source of truth for opponent logic
-    pbp = add_opponent_team_id(pbp)
-
-    tables["play_by_play"] = pbp
-
-    print(f"✅ Cleaned play_by_play rows: {len(pbp)}")
-
-    # ------------------------------------------------------------
-    # 10. Feature pipelines
-    # ------------------------------------------------------------
-    print("▶ Building transition offense features...")
-    transition = build_transition_offense_features(
-        tables["play_by_play"],
-        games_spine=games_spine,
-        offsets=offsets,
-    )
-
-    print("▶ Building strength of schedule...")
-    games_sos = strength_of_schedule(game_summary)
-    games_sos = games_sos[games_sos["game_id"].isin(game_ids)]
-
-    print("▶ Loading teams...")
-    teams = con.execute("""
-        SELECT team_id, tri_code
-        FROM all_teams
-    """).df()
-
-    print("▶ Building goalie stats...")
-    goalie_stats = build_team_goalie_stats(
-        tables["goalie_stats"],
-        teams,
-        games_spine,
-    )
-
-    print("▶ Building special teams stats...")
-    special_teams = build_special_teams_stats(
-        tables["power_play"],
-        tables["penalty_kill"],
-        games_spine,
-        offsets=offsets,
-    )
-
-    # ------------------------------------------------------------
-    # DEBUG feature sizes
-    # ------------------------------------------------------------
-    print("\n========== FEATURE BLOCK ROW COUNTS ==========")
-    print("games_spine:", len(games_spine))
-    print("games_sos:", len(games_sos))
-    print("goalie_stats:", len(goalie_stats))
-    print("special_teams:", len(special_teams))
-    print("rush:", len(transition["cumulative_rush"]))
-    print("shooting:", len(transition["cumulative_shooting"]))
-    print("scoring:", len(transition["cumulative_scoring"]))
-    print("sog:", len(transition["cumulative_sog"]))
-    print("============================================\n")
-
-    # ------------------------------------------------------------
-    # 11. Core DF
-    # ------------------------------------------------------------
-    print("▶ Building core dataframe...")
-    core_df = build_core_df(
-        play_by_play=tables["play_by_play"],
-        backfill_df=backfill_df,
-        games_spine=games_spine,
-        games_sos=games_sos,
-        special_teams=special_teams,
-        cumulative_rush_stats=transition["cumulative_rush"],
-        cumulative_shooting_stats=transition["cumulative_shooting"],
-        cumulative_scoring=transition["cumulative_scoring"],
-        cumulative_shots_on_goal=transition["cumulative_sog"],
-        cumulative_goalie_stats=goalie_stats,
-    )
-
-    print(f"Core DF rows: {len(core_df)}")
-
-    if core_df.empty:
-        print("❌ core_df empty — merge chain failed.")
-        return
-
-    # ------------------------------------------------------------
-    # 12. Final DF
-    # ------------------------------------------------------------
-    print("▶ Merging standings...")
-    final_df = build_final_df(core_df, tables["daily_standings"])
-
-    print(f"Final DF rows: {len(final_df)}")
-
-    if final_df.empty:
-        print("❌ final_df empty — standings merge failed.")
-        return
-
-    # ------------------------------------------------------------
-    # 13. Features + schema
-    # ------------------------------------------------------------
-    print("▶ Adding derived features...")
-    final_df = special_features(final_df)
-
-    if "made_playoffs" not in final_df.columns:
-        final_df["made_playoffs"] = pd.NA
-
-    final_df = enforce_data_schema(final_df)
-
-    if final_df.empty:
-        print("⚠️ final_df empty after schema.")
-        return
-
-    # ------------------------------------------------------------
-    # 14. Upsert
-    # ------------------------------------------------------------
-    print("▶ Writing to DuckDB...")
-
-    con.register("prediction_updates", final_df)
-
-    con.execute("""
-        DELETE FROM team_daily_stats
-        WHERE (season_id, game_id, team_id) IN (
-            SELECT season_id, game_id, team_id
-            FROM prediction_updates
-        )
-    """)
-
-    con.execute("""
-        INSERT INTO team_daily_stats
-        SELECT *
-        FROM prediction_updates
-    """)
-
-    print(f"✅ Inserted {len(final_df)} rows")
-    print("✅ Backfill complete\n")
-
-
-# # ============================================================
-# # EXECUTION
-# # ============================================================
-# if __name__ == "__main__":
-
-#     con = duckdb.connect(DB_PATH)
-
-#     for season_id in range(20252026, 20252026 +1):
-#         run_prediction_backfill(con, season_id)
-
-#     con.close()
-#     print("\n🏁 Historical play by plays backfill complete.")
-    
 if __name__ == "__main__":
+
+    print("RUNNING FILE:", __file__)
 
     con = duckdb.connect(DB_PATH)
 
-    season_ids = [20242025]
-    # season_ids = [20142015, 20152016]
+    season_ids = [20262027]
 
-    # ------------------------------------------------------------
-    # 0. Create temp table fresh
-    # ------------------------------------------------------------
-    con.execute("DROP TABLE IF EXISTS team_daily_stats_tmp")
+    try:
 
-    con.execute("""
-        CREATE TABLE team_daily_stats_tmp AS
-        SELECT * FROM team_daily_stats WHERE 1=0
-    """)
+        # ========================================================
+        # FULL REBUILD — SELECTED SEASONS ONLY
+        # ========================================================
 
-    print("🧱 Temp table initialized")
+        for season_id in season_ids:
 
-    # ------------------------------------------------------------
-    # 1. Run backfill INTO TEMP TABLE
-    # ------------------------------------------------------------
-    for season_id in season_ids:
-        print(f"\n==============================")
-        print(f"▶ Running prediction backfill for season {season_id}")
-        print(f"==============================\n")
+            print("\n" + "=" * 60)
+            print(f"⚠️ FULL REBUILD: clearing team_daily_stats for {season_id}")
+            print("=" * 60)
 
-        run_prediction_backfill(con, season_id)
+            # Delete only the selected season
+            con.execute("""
+                DELETE FROM team_daily_stats
+                WHERE season_id = ?
+            """, [season_id])
 
-    # ------------------------------------------------------------
-    # 2. Row count check
-    # ------------------------------------------------------------
-    old_count = con.execute("SELECT COUNT(*) FROM team_daily_stats").fetchone()[0]
-    new_count = con.execute("SELECT COUNT(*) FROM team_daily_stats_tmp").fetchone()[0]
+            # Verify selected season was cleared
+            remaining = con.execute("""
+                SELECT COUNT(*)
+                FROM team_daily_stats
+                WHERE season_id = ?
+            """, [season_id]).fetchone()[0]
 
-    print(f"\nRow count check → OLD: {old_count:,} | NEW: {new_count:,}")
+            if remaining != 0:
+                raise RuntimeError(
+                    f"team_daily_stats was not cleared for {season_id}: "
+                    f"{remaining:,} rows remain."
+                )
 
-    # ------------------------------------------------------------
-    # 3. SOS sanity check
-    # ------------------------------------------------------------
-    print("\n🔍 SOS sanity check (BOS):")
+            print(f"✅ team_daily_stats cleared for {season_id}.")
 
-    print(
-        con.execute("""
-        SELECT tri_code, game_date, sos_future
-        FROM team_daily_stats_tmp
-        WHERE tri_code = 'BOS'
-        ORDER BY game_date DESC
-        LIMIT 10
+            # ========================================================
+            # Rebuild selected season
+            # ========================================================
+
+            print("\n" + "=" * 60)
+            print(f"▶ REBUILDING {season_id}")
+            print("=" * 60)
+
+            run_prediction_backfill(
+                con=con,
+                season_id=season_id,
+            )
+
+        # ========================================================
+        # Final validation
+        # ========================================================
+
+        print("\n" + "=" * 60)
+        print("▶ FINAL TABLE VALIDATION")
+        print("=" * 60)
+
+        validation = con.execute("""
+            SELECT
+                season_id,
+                COUNT(*) AS rows,
+                COUNT(DISTINCT game_id) AS games,
+                COUNT(DISTINCT team_id) AS teams,
+                MIN(game_date) AS first_date,
+                MAX(game_date) AS last_date
+            FROM team_daily_stats
+            GROUP BY season_id
+            ORDER BY season_id
         """).df()
-    )
 
-    # ------------------------------------------------------------
-    # 4. Backup
-    # ------------------------------------------------------------
-    con.execute("DROP TABLE IF EXISTS team_daily_stats_backup")
+        print(validation.to_string(index=False))
 
-    con.execute("""
-        CREATE TABLE team_daily_stats_backup AS
-        SELECT * FROM team_daily_stats
-    """)
+        # Every game must have exactly 2 team rows
+        bad_games = con.execute("""
+            SELECT
+                season_id,
+                game_id,
+                COUNT(*) AS team_rows
+            FROM team_daily_stats
+            GROUP BY season_id, game_id
+            HAVING COUNT(*) <> 2
+            ORDER BY season_id, game_id
+        """).df()
 
-    print("\n✅ Backup created")
+        if not bad_games.empty:
+            raise RuntimeError(
+                "❌ Games found without exactly 2 team rows:\n"
+                + bad_games.to_string(index=False)
+            )
 
-    # ------------------------------------------------------------
-    # 5. Swap
-    # ------------------------------------------------------------
-    con.execute("DROP TABLE team_daily_stats")
+        print("\n✅ Every game has exactly 2 team rows.")
 
-    con.execute("""
-        ALTER TABLE team_daily_stats_tmp RENAME TO team_daily_stats
-    """)
+        print("\n🏁 Selected season rebuild complete.")
+        print(f"✅ Rebuilt seasons: {season_ids}")
+        print("✅ All other seasons preserved.")
 
-    print("\n🚀 Swap complete — new data is live")
-
-    con.close()
-
-    print("\n🏁 Backfill complete.")
+    finally:
+        con.close()
+        print("🔒 DuckDB connection closed.")

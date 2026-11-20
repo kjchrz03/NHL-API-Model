@@ -127,7 +127,7 @@ if __name__ == "__main__":
     seasons = con.execute("""
         SELECT season_id
         FROM important_dates
-        WHERE season_id >= 20132014
+        WHERE season_id == 20262027
         ORDER BY season_id
     """).fetch_df()["season_id"].tolist()
 

@@ -119,7 +119,10 @@ def get_goalie_games(start_date: str, end_date: str) -> pd.DataFrame:
     params = {
         "isAggregate": "false",
         "isGame": "true",
-        "sort": '[{"property":"gameId","direction":"ASC"}]',
+        "sort": (
+            '[{"property":"gameId","direction":"ASC"},'
+            '{"property":"playerId","direction":"ASC"}]'
+        ),
         "cayenneExp": cayenne,
         "start": 0,
         "limit": limit,
@@ -263,11 +266,7 @@ if __name__ == "__main__":
 
     # Adjust range as needed
 
-    season_ids = [20132014,
-        20142015, 20152016, 20162017, 20172018,
-        20182019, 20192020, 20202021, 20212022,
-        20222023, 20232024, 20242025, 20252026
-    ]
+    season_ids = [20262027]
 
 
     for season_id in season_ids:

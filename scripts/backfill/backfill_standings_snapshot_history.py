@@ -35,7 +35,18 @@ def safe_get(url, retries=5):
         return None
     print("❌ Max retries reached:", url)
     return None
+def get_regular_season_games(season_id: int) -> int:
 
+    # COVID-shortened season
+    if season_id == 20202021:
+        return 56
+
+    # 84-game schedule beginning in 2026-27
+    if season_id >= 20262027:
+        return 84
+
+    # Standard NHL schedule
+    return 82
 
 # ============================================================
 # Schema
@@ -189,27 +200,40 @@ def enforce_clinch_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_season_standings(con, season_id: int):
     clinch_rows = []
+    season_games = get_regular_season_games(season_id)
 
+    print(f"🏒 Regular-season length: {season_games} games")
     print(f"\n🏒 Backfilling standings for {season_id}")
 
     # --------------------------------------------------------
-    # Determine season date range from game summary
+    # Determine season date range from important_dates
     # --------------------------------------------------------
+
     query = """
-        SELECT MIN(game_date), MAX(game_date)
-        FROM all_game_summary
+        SELECT
+            regular_start,
+            regular_end
+        FROM important_dates
         WHERE season_id = ?
-          AND gameState = 'OFF'
     """
-    start_date, end_date = con.execute(query, [season_id]).fetchone()
+
+    dates = con.execute(query, [season_id]).fetchone()
+
+    if dates is None:
+        print(f"⚠ No important_dates record for {season_id} — skipping")
+        return
+
+    start_date, end_date = dates
 
     if start_date is None or end_date is None:
-        print(f"⚠ No completed games for {season_id} — skipping")
+        print(
+            f"⚠ Missing regular_start or regular_end "
+            f"for {season_id} — skipping"
+        )
         return
 
     start_date = pd.to_datetime(start_date)
     end_date = pd.to_datetime(end_date)
-
     print(f"📅 {start_date.date()} → {end_date.date()}")
 
     base_url = "https://api-web.nhle.com/v1/standings/"
@@ -332,14 +356,21 @@ def build_season_standings(con, season_id: int):
 
                 }
 
-            clinch_indicator = team.get("clinchIndicator") 
+            clinch_indicator = team.get("clinchIndicator")
+
+            if clinch_indicator:
+                print(
+                    date_str,
+                    team.get("teamAbbrev", {}).get("default"),
+                    clinch_indicator
+                )
 
             if clinch_indicator in ("x", "e"):
                 clinch_rows.append({
                     "clinch_indicator": True,
                     "tri_code": team.get("teamAbbrev", {}).get("default"),
-                    "clinch_type": clinch_indicator,        
-                    "clinch_date": pd.to_datetime(date_str).date(), 
+                    "clinch_type": clinch_indicator,
+                    "clinch_date": pd.to_datetime(date_str).date(),
                     "season_id": season_id,
                 })
 
@@ -352,9 +383,20 @@ def build_season_standings(con, season_id: int):
 
     df = pd.DataFrame(all_rows)
 
-    df["games_remaining"] = 82 - df["games_played"].fillna(0)
-    df["ppg"] = np.where(df["games_played"] > 0, df["points"] / df["games_played"], 0.0)
-    df["projected_points"] = (df["ppg"] * 82).round().astype("Int64")
+    df["games_remaining"] = (
+    season_games
+    - df["games_played"].fillna(0)
+    ).clip(lower=0).astype("Int64")
+
+    df["ppg"] = np.where(
+        df["games_played"] > 0,
+        df["points"] / df["games_played"],
+        0.0,
+    )
+
+    df["projected_points"] = (
+        df["ppg"] * season_games
+    ).round().astype("Int64")
 
     df = enforce_snap_schema(df)
     # --------------------------------------------------------
@@ -430,7 +472,7 @@ def build_season_standings(con, season_id: int):
 if __name__ == "__main__":
 
     con = duckdb.connect(DB_PATH)
-    season_ids = [20252026]
+    season_ids = [20262027]
     # for season_id in range(20002001, 20042005 + 1):
     for season_id in season_ids:
         build_season_standings(con, season_id)

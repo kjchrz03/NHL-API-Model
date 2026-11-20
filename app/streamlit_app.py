@@ -1,18 +1,30 @@
 # Import the external library
 # Import the function from season_data.py
 from current_standings import fetch_current_standings
+from current_predictions import fetch_current_predictions, fetch_shap_values, fetch_shap_summary, calculate_shap_consistency, get_feature_label, get_feature_description
 import streamlit as st
 import streamlit.components.v1 as components
 from streamlit_echarts import st_echarts
 import traceback 
 import altair as alt
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import matplotlib
 matplotlib.use('Agg')  # Use the Agg backend
 
 import logging
-logging.getLogger("streamlit").setLevel(logging.ERROR)
+logger = logging.getLogger(__name__)
+
+try:
+    # Your database queries and merge code here
+    pass
+
+except Exception:
+    logger.exception("Failed to load prediction and game data")
+    st.error("Unable to load the dashboard data.")
+    st.stop()
+
 
 st.set_page_config(page_title="Check This Data", 
                    page_icon="🏒", 
@@ -27,9 +39,6 @@ backgroundColor="#e1dee9"
 secondaryBackgroundColor="#d5cfe1"
 textColor="#262730"
 font="Garamond"
-
-
-
 
 option = {
     "tooltip": {"trigger": "axis"},
@@ -150,8 +159,9 @@ def display_standings():
     try:
         standings =  fetch_current_standings()
         return standings
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
+    except Exception:
+        st.error("Unable to load data. Please try again later.")
+        st.stop()
         return None
     
 
@@ -167,6 +177,7 @@ def load_standings(standings):
     standings['Points'] = standings['points']
     standings['Points Pct'] = standings['pointPctg']
     standings['Wild Card Rank'] = standings['wildcardSequence']
+    
     # Select specific columns to return
     selected_columns = ['Conference', 'Conference Rank', 'Division', 'Division Rank', 'Team', 'Games Played', 'logo', 'Win Pct', 
                         'Points', 'Points Pct', 'Wild Card Rank']
@@ -533,23 +544,101 @@ with tab_standings:
 ##########################################
 ## Thanksgiving Tab                     
 ##########################################
-with tab_txgiving:
+# with tab_txgiving:
+
+    # if not pred.empty:
+    #     prob_map = {row["playoff_prob"]: row["tri_code"] for _, row in pred.iterrows()}
+
+    #     best_prob, best_team = max(prob_map.items())
+    #     worst_prob, worst_team = min(prob_map.items())
+
+    #     bottom_left_cell = cols[0].container(border=True, height="stretch", vertical_alignment="center")
+
+    #     with bottom_left_cell:
+    #         st.subheader("Season Highlights")
+
+    #         mcols = st.columns(2)
+
+    #         mcols[0].metric(
+    #             "Best Probability",
+    #             best_team,
+    #             f"{best_prob*100:.1f}%" 
+    #         )
+
+    #         mcols[1].metric(
+    #             "Worst Probability",
+    #             worst_team,
+    #              f"{worst_prob*100:.1f}%"
+    #         )
+
+
+    
+
+
+
+
+
+
+##########################################
+## Teams Tab                            ##
+##########################################
+with tab_teams:
 
     cols = st.columns([1, 3])
 
     @st.cache_data(ttl="6h")
-    def load_full_data():
-        df = pd.read_csv(r"C:\Users\kjchr\Desktop\hockey\new_hockey_env\API data\app\predictions_concat.csv")
+    def load_full_data(season_id, model_version="v6"):
+        try:
+            df = fetch_current_predictions(
+                season_id=season_id,
+                model_version=model_version
+            )
 
-        # Normalize fields
-        df["tri_code"] = df["tri_code"].str.upper().str.strip()
-        df["team_name"] = df["team_name"].str.strip()
-        df["season"] = df["season_id"].astype(int)
-        df["label"] = df["tri_code"]
+            # Normalize fields
+            df["label"] = df["tri_code"].str.upper().str.strip()
+            df["team_name"] = df["team_name"].str.strip()
+            df["season"] = df["season_id"].astype(int)
 
-        return df
+            return df
 
-    full_df = load_full_data()
+        except Exception:
+            st.error("Unable to load data. Please try again later.")
+            st.stop()
+            return None
+        
+    @st.cache_data(ttl="6h")
+    def load_shap_data(season_id, model_version="v6"):
+        
+        return fetch_shap_values(
+            season_id=season_id,
+            model_version=model_version
+        )
+
+    
+    
+    @st.cache_data(ttl="6h")
+    def load_shap_summary(season_id, model_version="v6"):
+        return fetch_shap_summary(
+                    season_id=season_id,
+                    model_version=model_version
+                )
+
+    
+        
+    full_df = load_full_data(
+        season_id=20262027,
+        model_version="v6"
+    )
+
+    shap_df = load_shap_data(
+        season_id=20262027,
+        model_version="v6"
+    )
+    
+    shap_summary = load_shap_summary(
+        season_id=20262027,
+        model_version="v6"
+    )
     
     # =========================================================
     #  Division Colors
@@ -620,23 +709,36 @@ with tab_txgiving:
     css_rules += "</style>"
 
     st.markdown(css_rules, unsafe_allow_html=True)
-    
+        
+    # =========================================================
+    # FEATURE SELECTION UI
+    # =========================================================
+    SHAP_FEATURE = sorted(
+        shap_summary["feature"].dropna().unique(),
+        key=lambda feature: get_feature_label(feature).casefold()
+    )
+    shap_labels = sorted(
+        get_feature_label(feature)
+        for feature in SHAP_FEATURE
+    )
     # =========================================================
     #  TEAM SELECTION UI
     # =========================================================
     TRI_CODES = sorted(full_df["tri_code"].unique())
-    available_labels = ["All Teams"] + sorted(TRI_CODES)
+    available_labels = sorted(TRI_CODES)
 
-    top_left_cell = cols[0].container(border=True, height="stretch", vertical_alignment="center")
+    top_left_cell = cols[0].container(
+    border=True
+)
 
     with top_left_cell:
         st.subheader("Team Selection")
 
-        selected_labels = st.multiselect(
-            "Select Teams",
-            options=available_labels,
-            default=["BOS"],  
-        )
+        selected_labels = st.selectbox(
+        "Select Team",
+        options=available_labels,
+        index=available_labels.index("BOS") if "BOS" in available_labels else 0,
+    )
 
         # ---------------------------------------------------
         # Logic for handling "All Teams"
@@ -670,6 +772,7 @@ with tab_txgiving:
         "2023-24": 20232024,
         "2024-25": 20242025,
         "2025-26": 20252026,
+        "2026-27": 20262027,
     }
     season_labels = list(season_map.keys())
 
@@ -679,23 +782,688 @@ with tab_txgiving:
 
         season_mode = st.pills(
             "Mode",
-            options=["All Seasons", "This Season", "Custom Selection"],
-            default="All Seasons",
+            options=["Current Season", "All Seasons", "Custom Selection"],
+            default="Current Season",
         )
+        
+    
+    pred = full_df[full_df["tri_code"] == selected_teams].copy()
+    
 
     # ----------------------------------------------------
-    # HANDLE "THIS SEASON"
+    # HANDLE "Current Season"
     # ----------------------------------------------------
-    if season_mode == "This Season":
-        this_season_label = "2025-26"              # Display label
-        selected_seasons = [this_season_label]     # Must be a LIST
-        selected_season_ids = [season_map[this_season_label]]
+    if season_mode == "Current Season":
+
+        selected_seasons = ["2026-27"]
+        selected_season_ids = [season_map["2026-27"]]
+
+        current_season_id = selected_season_ids[0]
+
+        # Only dates from the current season
+        season_dates = pd.to_datetime(
+            pred.loc[
+                pred["season_id"] == current_season_id,
+                "game_date"
+            ]
+        ).dropna()
         
+        if season_dates.empty:
+            st.warning("No current-season data available for this team.")
+            st.stop()
+
         
+                # Reduce space above the date range box
+        st.markdown(
+            """
+            <style>
+            .st-key-date_range_box {
+                margin-top: -3rem;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+        with st.container(border=True, key="date_range_box"):
+            start_date, end_date = st.slider(
+                "Select Date Range",
+                min_value=season_dates.min().date(),
+                max_value=season_dates.max().date(),
+                value=(
+                    season_dates.min().date(),
+                    season_dates.max().date()
+                ),
+                format="MMM DD, YYYY"
+            )
+
+        # ============================================================
+        # SEASON OVERVIEW — SHAP CONSISTENCY
+        # ============================================================
+
+        if shap_df is not None and not shap_df.empty:
+
+            filtered_shap = shap_df.copy()
+
+            filtered_shap["game_date"] = pd.to_datetime(
+                filtered_shap["game_date"]
+            )
+
+            filtered_shap = filtered_shap[
+                filtered_shap["game_date"].dt.date.between(
+                    start_date,
+                    end_date
+                )
+            ]
+
+            shap_cols = [
+                c for c in filtered_shap.columns
+                if c.startswith("shap_") and c != "shap_base_value"
+            ]
+
+            # Calculate using the FULL season, before slider filtering
+            shap_consistency = calculate_shap_consistency(shap_df)
+            # Filter selected teams
+            team_shap = shap_consistency[
+                shap_consistency["tri_code"] == selected_teams
+            ].copy()
+
+            # Filter displayed dates using existing slider
+            team_shap = team_shap[
+                team_shap["game_date"].dt.date.between(
+                    start_date,
+                    end_date
+                )
+            ].copy()
+
+            if team_shap.empty:
+                st.info("No SHAP data available for the selected dates.")
+
+            else:
+
+                # Display a separate chart for each selected team
+                for team in [selected_teams]:
+
+                    selected_team_shap = team_shap[
+                        team_shap["tri_code"] == team
+                    ].copy()
+
+                    if selected_team_shap.empty:
+                        continue
+
+                    # Latest snapshot in selected range
+                    latest_date = selected_team_shap["game_date"].max()
+
+                    latest_shap = selected_team_shap[
+                        selected_team_shap["game_date"] == latest_date
+                    ].copy()
+
+                    # ====================================================
+                    # TOP FIVE CONSISTENTLY HELPFUL FEATURES
+                    # ====================================================
+
+                    # Top five strongest average positive contributors
+                    positive = (
+                        latest_shap[latest_shap["avg_shap"] > 0]
+                        .sort_values(
+                            ["avg_shap", "pct_positive"],
+                            ascending=[False, False]
+                        )
+                        .head(5)
+                        .copy()
+                    )
+
+                    positive["impact"] = "Helping"
+                    positive["consistency"] = positive["pct_positive"]
+
+                    # Top five strongest average negative contributors
+                    negative = (
+                        latest_shap[latest_shap["avg_shap"] < 0]
+                        .sort_values(
+                            ["avg_shap", "pct_negative"],
+                            ascending=[True, False]
+                        )
+                        .head(5)
+                        .copy()
+                    )
+
+                    negative["impact"] = "Hurting"
+                    negative["consistency"] = negative["pct_negative"]
+                    # Combine rankings
+                    chart_shap = pd.concat(
+                        [positive, negative],
+                        ignore_index=True
+                    )
+
+                    if chart_shap.empty:
+                        continue
+
+                    # Explicit display order
+                    # Sort helping first, hurting second
+                    # Within each group, highest frequency first
+
+                    chart_shap["impact_order"] = np.where(
+                        chart_shap["impact"] == "Helping",
+                        0,
+                        1
+                    )
+
+
+                    # Sort ALL features by consistency percentage, highest first
+                    chart_shap = chart_shap.sort_values(
+                        by=["consistency", "avg_shap"],
+                        ascending=[False, False]
+                    ).reset_index(drop=True)
+
+                    chart_shap["sort_order"] = np.arange(len(chart_shap))
+                    chart_shap["feature_label"] = (chart_shap["feature"].apply(get_feature_label)) 
+                    # Full background bar represents 100%
+                    chart_shap["full_bar"] = 1.0
+
+                    # ====================================================
+                    # CHART 1 — MOST CONSISTENT FEATURES
+                    # ====================================================
+
+                    st.subheader(f"{team} — Most Consistent Playoff Drivers")
+
+                    st.caption(
+                        f"Through {latest_date:%B %d, %Y} — "
+                        "percentage of daily prediction snapshots "
+                        "each feature helped or hurt the model."
+                    )
+
+                    # Shared axis configuration
+                    x_axis = alt.X(
+                        "full_bar:Q",
+                        title="Percentage of Snapshots",
+                        scale=alt.Scale(domain=[0, 1]),
+                        axis=alt.Axis(format=".0%")
+                    )
+
+                    y_axis = alt.Y(
+                        "feature_label:N",
+                        title=None,
+                        sort=chart_shap["feature_label"].tolist(),
+                        axis=alt.Axis(
+                            labelLimit=350,
+                            labelFontSize=12,
+                            labelPadding=10
+                        )
+                    )
+
+                    # ----------------------------------------------------
+                    # BACKGROUND — 100% BAR
+                    # ----------------------------------------------------
+
+                    background = (
+                        alt.Chart(chart_shap)
+                        .mark_bar(
+                            color="#343A40",
+                            cornerRadius=5,
+                            size=24
+                        )
+                        .encode(
+                            x=x_axis,
+                            y=y_axis
+                        )
+                    )
+
+                    # ----------------------------------------------------
+                    # FOREGROUND — ACTUAL CONSISTENCY
+                    # ----------------------------------------------------
+
+                    foreground = (
+                        alt.Chart(chart_shap)
+                        .mark_bar(
+                            cornerRadius=5,
+                            size=24
+                        )
+                        .encode(
+                            x=alt.X(
+                                "consistency:Q",
+                                title="Percentage of Snapshots",
+                                scale=alt.Scale(domain=[0, 1]),
+                                axis=alt.Axis(format=".0%")
+                            ),
+                            y=y_axis,
+                            color=alt.Color(
+                                "impact:N",
+                                scale=alt.Scale(
+                                    domain=["Helping", "Hurting"],
+                                    range=["#46E75E", "#EA0D02"]
+                                ),
+                                legend=alt.Legend(title=None)
+                            ),
+                            tooltip=[
+                                alt.Tooltip(
+                                    "feature_label:N",
+                                    title="Feature"
+                                ),
+                                alt.Tooltip(
+                                    "impact:N",
+                                    title="Direction"
+                                ),
+                                alt.Tooltip(
+                                    "consistency:Q",
+                                    title="Snapshot Frequency",
+                                    format=".1%"
+                                ),
+                                alt.Tooltip(
+                                    "avg_shap:Q",
+                                    title="Average Impact on Playoff Chances",
+                                    format="+.4f"
+                                ),
+                                alt.Tooltip(
+                                    "snapshots:Q",
+                                    title="Snapshots"
+                                )
+                            ]
+                        )
+                    )
+
+                    # ----------------------------------------------------
+                    # COMBINE CHARTS
+                    # ----------------------------------------------------
+
+                    consistency_chart = (
+                            alt.layer(background, foreground)
+                            .properties(
+                                height=400,
+                                width=650
+                            )
+                        )
+
+                    st.altair_chart(
+                        consistency_chart,
+                        width="stretch"
+                    )
+
+                                        
+                    # ====================================================
+                    # DIVIDER BETWEEN CHARTS
+                    # ====================================================
+
+                    st.divider()
+                    
+                    # ====================================================
+                    # CHART 2 — SHAP IMPACT OVER TIME
+                    # ====================================================
+
+                    st.subheader("Specific Impact Over Time")
+
+                    # Sort features alphabetically by display label
+                    SHAP_FEATURE = sorted(
+                        shap_summary["feature"].dropna().unique(),
+                        key=lambda feature: get_feature_label(feature).casefold()
+                    )
+
+                    # ====================================================
+                    # FEATURE SELECTION
+                    # ====================================================
+
+                    with st.container(border=True):
+
+                        selected_feature = st.selectbox(
+                            "Select a Feature",
+                            options=SHAP_FEATURE,
+                            format_func=get_feature_label,
+                            index=0,
+                            key="shap_feature_selection"
+                        )
+
+                    # ====================================================
+                    # PREPARE DATA
+                    # ====================================================
+
+                    shap_column = f"shap_{selected_feature}"
+
+                    if shap_column not in shap_df.columns:
+
+                        st.warning(
+                            f"Data is unavailable for {get_feature_label(selected_feature)}."
+                        )
+
+                    else:
+
+                        # Filter to selected team
+                        plot_df = shap_df.loc[
+                            shap_df["tri_code"] == selected_teams,
+                            ["snapshot_date", shap_column]
+                        ].copy()
+
+                        # Normalize dates and values
+                        plot_df["snapshot_date"] = pd.to_datetime(
+                            plot_df["snapshot_date"]
+                        )
+
+                        plot_df[shap_column] = pd.to_numeric(
+                            plot_df[shap_column],
+                            errors="coerce"
+                        )
+
+                        # Remove missing values
+                        plot_df = (
+                            plot_df
+                            .dropna(subset=["snapshot_date", shap_column])
+                            .sort_values("snapshot_date")
+                            .rename(columns={shap_column: "shap_value"})
+                        )
+
+                        # Apply existing date slider
+                        plot_df = plot_df[
+                            plot_df["snapshot_date"].dt.date.between(
+                                start_date,
+                                end_date
+                            )
+                        ].copy()
+
+                        # Prevent duplicate snapshots
+                        plot_df = plot_df.drop_duplicates(
+                            subset=["snapshot_date"],
+                            keep="last"
+                        )
+
+                        # ====================================================
+                        # CREATE CHART
+                        # ====================================================
+
+                        if plot_df.empty:
+
+                            st.info(
+                                "No data available for the selected "
+                                "team, feature, and date range."
+                            )
+
+                        else:
+
+                            # ------------------------------------------------
+                            # SHARED CHART ENCODING
+                            # ------------------------------------------------
+
+                            base = alt.Chart(plot_df).encode(
+                                x=alt.X(
+                                    "snapshot_date:T",
+                                    title="Snapshot Date",
+                                    axis=alt.Axis(
+                                        format="%b %d",
+                                        labelAngle=-45
+                                    )
+                                )
+                            )
+
+                            # ------------------------------------------------
+                            # POSITIVE SHAP AREA
+                            # ------------------------------------------------
+
+                            positive_area = (
+                                base
+                                .mark_area(
+                                    color="#46E75E",
+                                    opacity=0.20
+                                )
+                                .encode(
+                                    y=alt.Y(
+                                        "shap_value:Q"
+                                    ),
+                                    y2=alt.Y2(datum=0)
+                                )
+                                .transform_calculate(
+                                    shap_value="max(datum.shap_value, 0)"
+                                )
+                            )
+
+                            # ------------------------------------------------
+                            # NEGATIVE SHAP AREA
+                            # ------------------------------------------------
+
+                            negative_area = (
+                                base
+                                .mark_area(
+                                    color="#EA0D02",
+                                    opacity=0.20
+                                )
+                                .encode(
+                                    y=alt.Y(
+                                        "shap_value:Q"
+                                    ),
+                                    y2=alt.Y2(datum=0)
+                                )
+                                .transform_calculate(
+                                    shap_value="min(datum.shap_value, 0)"
+                                )
+                            )
+
+                            # ------------------------------------------------
+                            # SHAP IMPACT LINE
+                            # ------------------------------------------------
+
+                            shap_line = (
+                                base
+                                .mark_line(
+                                    color="#4DA6FF",
+                                    strokeWidth=2.5,
+                                    point=alt.OverlayMarkDef(
+                                        filled=True,
+                                        size=65
+                                    )
+                                )
+                                .encode(
+                                    y=alt.Y(
+                                        "shap_value:Q"
+                                    ),
+                                    tooltip=[
+                                        alt.Tooltip(
+                                            "snapshot_date:T",
+                                            title="Snapshot Date",
+                                            format="%b %d, %Y"
+                                        ),
+                                        alt.Tooltip(
+                                            "shap_value:Q",
+                                            title="Feature Impact",
+                                            format="+.4f"
+                                        )
+                                    ]
+                                )
+                            )
+
+                            # ------------------------------------------------
+                            # ZERO REFERENCE LINE
+                            # ------------------------------------------------
+
+                            zero_line = (
+                                alt.Chart(
+                                    pd.DataFrame({"zero": [0]})
+                                )
+                                .mark_rule(
+                                    color="#AAAAAA",
+                                    strokeDash=[5, 5],
+                                    opacity=0.7
+                                )
+                                .encode(
+                                    y="zero:Q"
+                                )
+                            )
+
+                            # ------------------------------------------------
+                            # COMBINE CHART
+                            # ------------------------------------------------
+
+                            shap_impact_chart = (
+                                alt.layer(
+                                    positive_area,
+                                    negative_area,
+                                    zero_line,
+                                    shap_line
+                                )
+                                .encode(
+                                    y=alt.Y(
+                                        "shap_value:Q",
+                                        title="Impact on Playoff Chances"
+                                    )
+                                )
+                                .properties(
+                                    height=350
+                                )
+                                .interactive()
+                            )
+
+                            # ------------------------------------------------
+                            # TEAM, FEATURE TITLE AND EXPLANATION
+                            # ------------------------------------------------
+
+                            st.markdown(
+                                f"#### {selected_teams} — "
+                                f"{get_feature_label(selected_feature)}"
+                            )
+
+                            st.markdown(
+                                get_feature_description(selected_feature)
+                            )
+
+                            # ------------------------------------------------
+                            # DISPLAY CHART
+                            # ------------------------------------------------
+
+                            st.altair_chart(
+                                shap_impact_chart,
+                                width="stretch"
+                            )
+
+                            # ====================================================
+                            # CHART EXPLANATION
+                            # ====================================================
+
+                            st.caption(
+                                "Green means this feature is helping the team's "
+                                "playoff chances. Red means it's hurting them. "
+                                "The values show the strength of the impact, "
+                                "not the percentage change."
+                            )
+
+                                                        
+                    # ====================================================
+                    # DIVIDER BETWEEN CHARTS
+                    # ====================================================
+
+                    st.divider()
+                # ====================================================
+                # CHART 3 — SEASON PROGRESSION
+                # ====================================================
+
+                st.subheader("How Playoff Drivers Evolve")
+
+                # Keep only features from the current top-five rankings
+                progression_parts = []
+
+                for _, row in chart_shap.iterrows():
+                    
+                    feature_data = team_shap[
+                        team_shap["feature"] == row["feature"]
+                    ].copy()
+
+                    feature_data["impact"] = row["impact"]
+
+                    feature_data["frequency"] = (
+                        feature_data["pct_positive"]
+                        if row["impact"] == "Helping"
+                        else feature_data["pct_negative"]
+                    )
+
+                    # Convert feature name to plain English
+                    feature_data["feature_label"] = get_feature_label(
+                        row["feature"]
+                    )
+
+                    # Use readable labels in the chart legend
+                    feature_data["series"] = (
+                        feature_data["feature_label"] + " (" + row["impact"] + ")"
+                    )
+
+                    progression_parts.append(feature_data)
+
+                if progression_parts:
+
+                    progression_df = pd.concat(
+                        progression_parts,
+                        ignore_index=True
+                    )
+
+                    # Keep your existing progression_chart code here,
+                    # indented inside this if statement
+
+                else:
+                    st.info("No feature progression data available.")
+
+                progression_chart = (
+                    alt.Chart(progression_df)
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X(
+                            "game_date:T",
+                            title="Snapshot Date"
+                        ),
+                        y=alt.Y(
+                            "frequency:Q",
+                            title="Season-to-Date Snapshot Frequency",
+                            scale=alt.Scale(domain=[0, 1]),
+                            axis=alt.Axis(format=".0%")
+                        ),
+                        color=alt.Color(
+                                "series:N",
+                                title="Feature",
+                                legend=alt.Legend(
+                                    orient="bottom",
+                                    columns=2,
+                                    labelLimit=350,
+                                    labelFontSize=12,
+                                    symbolSize=100
+                                )
+                            ),
+                        strokeDash=alt.StrokeDash(
+                            "impact:N",
+                            scale=alt.Scale(
+                                domain=["Helping", "Hurting"],
+                                range=[[1, 0], [5, 4]]
+                            ),
+                            legend=None
+                        ),
+                        tooltip=[
+                            alt.Tooltip("feature_label:N", title="Feature"),
+                            alt.Tooltip("impact:N", title="Direction"),
+                            alt.Tooltip(
+                                "game_date:T",
+                                title="Date",
+                                format="%b %d, %Y"
+                            ),
+                            alt.Tooltip(
+                                "frequency:Q",
+                                title="Season-to-Date Frequency",
+                                format=".1%"
+                            ),
+                            alt.Tooltip(
+                                "avg_shap:Q",
+                                title="Average SHAP",
+                                format="+.4f"
+                            ),
+                            alt.Tooltip(
+                                "snapshots:Q",
+                                title="Snapshots Analyzed"
+                            )
+                        ]
+                    )
+                    .properties(height=800)
+                    .interactive()
+                )
+
+                st.altair_chart(
+                    progression_chart,
+                    width="stretch"
+                )
+                                   
     # ===============================================
     # CUSTOM SELECTION — MULTI-PICK PILL BUTTONS
     # ===============================================
-    if season_mode == "Custom Selection":
+    elif season_mode == "Custom Selection":
 
         # Initialize session state on first load
         if "selected_custom_seasons" not in st.session_state:
@@ -730,20 +1498,6 @@ with tab_txgiving:
     elif season_mode == "All Seasons":
         selected_seasons = season_labels[:]
 
-    # # =====================================s==========
-    # # SLIDER RANGE SELECTION
-    # # ===============================================
-    # elif season_mode == "Season Range":
-    #     start_s, end_s = st.select_slider(
-    #         "Season Range",
-    #         options=season_labels,
-    #         value=(season_labels[0], season_labels[-1])
-    #     )
-    #     selected_seasons = season_labels[
-    #         season_labels.index(start_s) : season_labels.index(end_s) + 1
-    #     ]
-
-
     # Convert selected season labels → numeric IDs
     selected_season_ids = [season_map[s] for s in selected_seasons]
 
@@ -751,13 +1505,13 @@ with tab_txgiving:
     # =========================================================
     # FILTER DATA
     # =========================================================
-    pred = full_df[full_df["tri_code"].isin(selected_teams)].copy()
+
 
     if selected_season_ids:
         pred = pred[pred["season"].isin(selected_season_ids)]
 
-    pred["made_playoffs_label"] = pred["made_playoffs"].map({1: "Yes", 0: "No"}).fillna("TBD")
-    pred['playoff_pred_label'] = pred['predicted_status'].map({1: "Yes", 0: "No"})  
+    # pred["made_playoffs_label"] = pred["made_playoffs"].map({1: "Yes", 0: "No"}).fillna("TBD")
+    # pred['playoff_pred_label'] = pred['playoff_prob_display'].map({1: "Yes", 0: "No"})  
 
     # =========================================================
     # RIGHT PANEL — ALTair Visualization
@@ -815,25 +1569,49 @@ with tab_txgiving:
             color_range = [team_colors[t] for t in color_domain]
 
             # ---------------------------------------------------------------
-            # 1. SINGLE SEASON → BAR CHART
+            # 1. SINGLE SEASON → Line Chart
             # ---------------------------------------------------------------
-            if len(selected_season_ids) == 1:
+            if season_mode == "Current Season":
+
                 season_label = selected_seasons[0]
 
+                chart_pred = pred.copy()
+                chart_pred["game_date"] = pd.to_datetime(
+                    chart_pred["game_date"]
+                )
+
+                # Filter to the selected date range
+                chart_pred = chart_pred[
+                    chart_pred["game_date"].dt.date.between(
+                        start_date,
+                        end_date
+                    )
+                ].copy()
+
+                chart_pred = chart_pred.sort_values(
+                    ["tri_code", "game_date"]
+                )
+
                 chart = (
-                    alt.Chart(pred)
-                    .mark_bar()
+                    alt.Chart(chart_pred)
+                    .mark_line(
+                        strokeWidth=2,
+                        point=True
+                    )
                     .encode(
                         x=alt.X(
-                            "tri_code:N",
-                            title="Team",
-                            sort="-y",
-                            axis=alt.Axis(labelAngle=0)
+                            "game_date:T",
+                            title="Game Date",
+                            axis=alt.Axis(
+                                format="%b %d",
+                                labelAngle=0
+                            )
                         ),
                         y=alt.Y(
-                            "playoff_prob:Q",
-                            title="Probability",
-                            scale=alt.Scale(domain=[0, 1])
+                            "playoff_prob_display:Q",
+                            title="Playoff Probability",
+                            scale=alt.Scale(domain=[0, 1]),
+                            axis=alt.Axis(format=".0%")
                         ),
                         color=alt.Color(
                             "tri_code:N",
@@ -846,39 +1624,39 @@ with tab_txgiving:
                                 orient="bottom",
                                 direction="horizontal",
                                 columns=16,
-                                padding=0,            # ← remove extra space
+                                padding=0,
                                 titleAnchor="middle",
                                 symbolSize=120,
                                 labelLimit=600
                             )
                         ),
                         tooltip=[
-                            # alt.Tooltip("tri_code", title="Team"),
-                            alt.Tooltip("team_name", title="Team"),
-                            alt.Tooltip("playoff_prob:Q", title="Probability", format=".1%"),
-                            alt.Tooltip("playoff_pred_label:N", title = "Playoff Prediction"),
-                            alt.Tooltip("made_playoffs_label:N", title="Made Playoffs"),
+                            alt.Tooltip("team_name:N", title="Team"),
+                            alt.Tooltip("game_date:T", title="Date", format="%b %d, %Y"),
+                            alt.Tooltip("playoff_prob_display:Q", title="Probability", format=".1%"),
+                            alt.Tooltip("playoff_tier:N", title="Playoff Prediction"),
                         ],
+                        order=alt.Order("game_date:T")
                     )
                     .properties(
-                        title=f"Playoff Probability — {season_label}",
-                        height=500                         # ←  chart height
+                        title=f"Playoff Probability Over Time — {season_label}",
+                        height=500
                     )
                     .configure_legend(
                         orient="bottom",
-                        padding=0,                         # ← required: removes bottom blank area
+                        padding=0,
                         labelLimit=600,
                         title=None
                     )
                 )
 
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, width="stretch")
 
             # ---------------------------------------------------------------
             # 2. MULTIPLE SEASONS → LINE CHART
             # ---------------------------------------------------------------
 
-            else:
+            elif season_mode in ["All Seasons", "Custom Selection"]:
                 chart = (
                     alt.Chart(pred)
                     .mark_line(point=True)
@@ -916,9 +1694,10 @@ with tab_txgiving:
                             alt.Tooltip("team_name", title="Team"),
                             alt.Tooltip("season:O", title="Season"),
                             alt.Tooltip("playoff_prob:Q", title="Probability", format=".1%"),
-                            alt.Tooltip("playoff_pred_label:N", title = "Playoff Prediction"),
+                            alt.Tooltip("playoff_tier:N", title="Playoff Prediction"),
                             alt.Tooltip("made_playoffs_label:N", title="Made Playoffs"),
                         ],
+                        
                     )
                     .properties(height=500)
                     .configure_legend(
@@ -929,41 +1708,295 @@ with tab_txgiving:
                     )
                 )
 
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart(chart, width='stretch')
+  
+                
 
     # =========================================================
     # BEST + WORST PLAYOFF PROBABILITY
     # =========================================================
     if not pred.empty:
-        prob_map = {row["playoff_prob"]: row["tri_code"] for _, row in pred.iterrows()}
 
-        best_prob, best_team = max(prob_map.items())
-        worst_prob, worst_team = min(prob_map.items())
+        # Highest and lowest probabilities recorded to date
+        best_row = pred.loc[pred["playoff_prob"].idxmax()]
+        worst_row = pred.loc[pred["playoff_prob"].idxmin()]
 
-        bottom_left_cell = cols[0].container(border=True, height="stretch", vertical_alignment="center")
+        best_prob = best_row["playoff_prob"]
+        worst_prob = worst_row["playoff_prob"]
+
+        best_against = best_row["opponent_name"]
+        worst_against = worst_row["opponent_name"]
+
+        best_date = pd.to_datetime(best_row["game_date"])
+        worst_date = pd.to_datetime(worst_row["game_date"])
+
+        bottom_left_cell = cols[0].container(
+            border=True,
+            height="stretch",
+            horizontal_alignment="center",
+            vertical_alignment="top"
+        )
 
         with bottom_left_cell:
             st.subheader("Season Highlights")
 
-            mcols = st.columns(2)
+            mcols = st.columns(2, 
+                               gap="small",
+                               vertical_alignment="top")
+            
+            st.markdown("""
+                <style>
+                /* Center the entire metric */
+                div[data-testid="stMetric"] {
+                    width: 100%;
+                    text-align: center !important;
+                }
 
-            mcols[0].metric(
-                "Best Probability",
-                best_team,
-                f"{best_prob*100:.1f}%" 
-            )
+                /* Center the metric label container */
+                div[data-testid="stMetricLabel"] {
+                    display: flex !important;
+                    width: 100% !important;
+                    justify-content: center !important;
+                    align-items: center !important;
+                    text-align: center !important;
+                }
 
-            mcols[1].metric(
-                "Worst Probability",
-                worst_team,
-                 f"{worst_prob*100:.1f}%"
-            )
+                /* Center the actual label text */
+                div[data-testid="stMetricLabel"] p {
+                    width: 100% !important;
+                    text-align: center !important;
+                }
 
+                /* Center the metric value */
+                div[data-testid="stMetricValue"] {
+                    display: flex !important;
+                    width: 100% !important;
+                    justify-content: center !important;
+                    text-align: center !important;
+                }
+                </style>
+                """, unsafe_allow_html=True)
 
-##########################################
-## Teams Tab                            ##
-##########################################
-with tab_teams:
+            with mcols[0]:
+                
+                st.markdown(
+                    "<p style='text-align:center; margin-bottom:0;'>Best Probability</p>",
+                    unsafe_allow_html=True
+                )
+                    
+                st.metric(
+                    label="Best Probability",
+                    value=f"{best_prob*100:.1f}%",
+                    label_visibility="collapsed",
+                    width = "stretch",
+                    
+                )
+
+                st.markdown(
+                    f"""
+                    <p style="
+                        text-align: center;
+                        color: gray;
+                        margin-top: -20px;
+                        margin-bottom: 0;
+                    ">
+                    <b>{best_date:%b %d}</b>
+                    <br>
+                    <b>{best_against}</b>
+                    </p>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            with mcols[1]:
+                st.markdown(
+                        "<p style='text-align:center; margin-bottom:0;'>Worst Probability</p>",
+                        unsafe_allow_html=True
+                    )
+
+                
+                                
+                st.metric(
+                    label="Worst Probability",
+                    value=f"{worst_prob*100:.1f}%",
+                    label_visibility="collapsed",
+                    width="stretch"
+                )
+
+                st.markdown(
+                    f"""
+                    <p style="
+                        text-align: center;
+                        color: gray;
+                        margin-top: -20px;
+                        margin-bottom: 0;
+                    ">
+                    <b>{worst_date:%b %d}</b>
+                    <br>
+                    <b>{worst_against}</b>                  
+                    </p>
+                    """,
+                    unsafe_allow_html=True
+                )
     
-    cols = st.columns([1, 3])
+        # chart_shap = pd.concat(
+        #     [positive, negative],
+        #     ignore_index=True
+        # )
+
+        # chart_shap["impact"] = np.where(
+        #     chart_shap["avg_shap"] > 0,
+        #     "Positive",
+        #     "Negative"
+        # )
+        
+
+        # # # Explicit position for the chart
+        # # Sort positives descending, negatives ascending
+        # positive = chart_shap[chart_shap["avg_shap"] > 0].sort_values(
+        #     "avg_shap", ascending=False
+        # )
+
+        # negative = chart_shap[chart_shap["avg_shap"] < 0].sort_values(
+        #     "avg_shap", ascending=True
+        # )
+
+        # chart_shap = pd.concat(
+        #     [positive, negative],
+        #     ignore_index=True
+        # )
+
+        # chart_shap["sort_order"] = np.arange(len(chart_shap))
+
+        # # Consistency for the direction of each feature
+        # chart_shap["consistency"] = np.where(
+        #     chart_shap["avg_shap"] > 0,
+        #     chart_shap["days_positive"],
+        #     chart_shap["days_negative"]
+        # )
+        # #=======================================
+        # # SHAP IMPACTS
+        # #=======================================
+        # chart = (
+        #     alt.Chart(chart_shap)
+        #     .mark_bar()
+        #     .encode(
+        #         x=alt.X(
+        #             "avg_shap:Q",
+        #             title="Average SHAP Contribution (Log-Odds)"
+        #         ),
+        #         y=alt.Y(
+        #             "feature:N",
+        #             title=None,
+        #             sort=alt.SortField(
+        #                 field="sort_order",
+        #                 order="descending"
+        #             )
+        #         ),
+        #         color=alt.Color(
+        #             "impact:N",
+        #             scale=alt.Scale(
+        #                 domain=["Positive", "Negative"],
+        #                 range=["#46E75E", "#EA0D02"]
+        #             ),
+        #             legend=None
+        #         ),
+        #         tooltip=[
+        #             alt.Tooltip("tri_code:N", title="Team"),
+        #             alt.Tooltip("feature:N", title="Feature"),
+        #             alt.Tooltip(
+        #                 "avg_shap:Q",
+        #                 title="Average Contribution",
+        #                 format="+.4f"
+        #             ),
+        #             alt.Tooltip(
+        #                 "consistency:Q",
+        #                 title="Days Helping/Hurting",
+        #                 format=".1%"
+        #             ),
+        #             alt.Tooltip(
+        #                 "observations:Q",
+        #                 title="Observations"
+        #             )
+        #         ]
+        #     )
+        #     .properties(height=400)
+        # )
+
+        # st.altair_chart(chart, width="stretch")
     
+            # top_shap = get_top_shap_features(
+            #     filtered_shap,
+            #     top_n=5
+            # ).copy()
+    
+            # # Sort positive values descending, then negative values ascending
+            # top_shap["sort_group"] = np.where(
+            #     top_shap["shap_value"] > 0,
+            #     0,
+            #     1
+            # )
+    
+            # top_shap = top_shap.sort_values(
+            #     by=["sort_group", "shap_value"],
+            #     ascending=[True, False]
+            # ).copy()
+    
+    
+            # # Sum each feature's contributions across the selected date range
+            # cumulative_shap = (
+            #     get_top_shap_features(filtered_shap, top_n=5)
+            #     .groupby("feature", as_index=False)["shap_value"]
+            #     .sum()
+            # )
+    
+            # # Sort positive descending, negative ascending
+            # positive = cumulative_shap[
+            #     cumulative_shap["shap_value"] > 0
+            # ].sort_values("shap_value", ascending=False).head(5)
+    
+            # negative = cumulative_shap[
+            #     cumulative_shap["shap_value"] < 0
+            # ].sort_values("shap_value", ascending=True).head(5)
+    
+            # chart_shap = pd.concat(
+            #     [positive, negative],
+            #     ignore_index=True
+            # )
+    
+            # chart_shap["impact"] = np.where(
+            #     chart_shap["shap_value"] > 0,
+            #     "Positive",
+            #     "Negative"
+            # )
+    
+            # chart_shap["sort_order"] = np.arange(len(chart_shap))
+    
+    
+            # # Negatives need ascending order (most negative first)
+            # positive = cumulative_shap[cumulative_shap["shap_value"] > 0].sort_values(
+            #     "shap_value", ascending=False
+            # )
+    
+            # negative = cumulative_shap[cumulative_shap["shap_value"] < 0].sort_values(
+            #     "shap_value", ascending=True
+            # )
+    
+            # chart_shap = pd.concat(
+            #     [positive, negative],
+            #     ignore_index=True
+            # )
+            
+        # base = alt.Chart(chart_shap)
+        
+        # left = base.transform_filter(
+        #     alt.datum.impact =='Negative')
+        # .encode(
+        #     alt.Y('feature:N'),
+        #         title= "Negative",
+        #         sort=alt.SortField(
+        #             field="sort_order",
+        #             order="descending")
+        #     alt.X()  
+        # )
+        # st.altair_chart(chart, width="stretch")

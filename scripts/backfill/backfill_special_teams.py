@@ -389,11 +389,7 @@ if __name__ == "__main__":
 
     con = duckdb.connect(DB_PATH)
 
-    season_ids = [20132014,
-        20142015, 20152016, 20162017, 20172018,
-        20182019, 20192020, 20202021, 20212022,
-        20222023, 20232024, 20242025, 20252026
-    ]
+    season_ids = [20262027 ]
 
     for season_id in season_ids:
         run_special_teams(con, season_id)

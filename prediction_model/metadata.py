@@ -1,10 +1,10 @@
+
 # ============================================================
 # metadata.py
 # ============================================================
 
 from typing import Dict, List
 from config import MODEL_VERSION
-
 
 
 # ------------------------------------------------------------
@@ -51,6 +51,7 @@ FEATURE_GROUPS: Dict[str, List[str]] = {
         "sos_future",
         "games_played",
         "games_remaining",
+        "season_pct",
     ],
     "Goal Differential": [
         "goal_diff",
@@ -101,6 +102,7 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
 
     "sos_past": "Strength of schedule already played",
     "sos_future": "Strength of remaining schedule",
+    "season_pct": "Percentage of the team's regular-season schedule completed",
 
     "goal_diff": "Total goal differential",
     "home_goal_diff": "Goal differential in home games",
@@ -116,7 +118,7 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
     "pk_pct": "Penalty kill success rate",
     "ppng_rank": "League rank in power-play net goals",
     "pk_rank": "League rank in penalty-kill effectiveness",
-    "times_sh_pg" : "Average number of times short handed per game",
+    "times_sh_pg": "Average number of times short handed per game",
 
     "c_shot_pct": "Team shooting percentage over the season",
     "c_sv_pct": "Team save percentage over the season",
@@ -163,14 +165,24 @@ def feature_to_group(feature: str) -> str:
 def explain_shap_row(shap_series, top_n: int = 5):
     """
     Convert a SHAP value Series into grouped narrative drivers.
+    Select the strongest positive and negative impacts.
     """
     drivers = []
 
-    for feat, val in shap_series.sort_values(ascending=False).head(top_n).items():
+    top_features = shap_series.reindex(
+        shap_series.abs().sort_values(ascending=False).head(top_n).index
+    )
+
+    for feat, val in top_features.items():
         drivers.append({
             "feature": feat,
             "group": feature_to_group(feat),
             "impact": float(val),
+            "direction": (
+                "positive" if val > 0
+                else "negative" if val < 0
+                else "neutral"
+            ),
             "description": FEATURE_DESCRIPTIONS.get(feat, ""),
         })
 
