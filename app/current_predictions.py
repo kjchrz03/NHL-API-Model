@@ -6,7 +6,7 @@ import os
 import time
 import random
 import duckdb
-from IPython.display import display, HTML
+
 import html
 import logging
 
