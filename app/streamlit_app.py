@@ -48,7 +48,7 @@ option = {
     "xAxis": {
         "type": "category",
         "data": ["2014-15", "2015-16", "2016-17", "2017-18", "2018-19",
-                    "2021-22", "2022-23", "2023-24", "2024-25"]
+                    "2021-22", "2022-23", "2023-24", "2024-25", "2026-27"]
     },
     "yAxis": {"type": "value"},
     "series": [
@@ -56,13 +56,13 @@ option = {
             "name": "Eastern",
             "type": "line",
             "smooth": True,
-            "data": [0.750, 0.625, 0.750, 0.750, 0.625, 0.875, 0.875, 0.875, 0.750]
+            "data": [0.750, 0.625, 0.750, 0.750, 0.625, 0.875, 0.875, 0.875, 0.750, 0.750]
         },
         {
             "name": "Western",
             "type": "line",
             "smooth": True,
-            "data": [0.875, 0.875, 0.875, 0.625, 0.750, 0.625, 0.750, 0.750, 0.750]
+            "data": [0.875, 0.875, 0.875, 0.625, 0.750, 0.625, 0.750, 0.750, 0.750, 0.750]
         }
     ]
 }
@@ -142,7 +142,7 @@ st.title("Check This Data")
 st.markdown('''##### <span style="color: #aaaaaa">Explore NHL Advanced Stats, Simply</span>
             ''', unsafe_allow_html=True)
                 
-tab_txgiving, tab_teams = st.tabs(["Thanksgiving Predictor", "Explore Teams"])
+tab_txgiving, tab_teams, tab_whatif = st.tabs(["Thanksgiving Predictor", "Explore Teams", "What Ifs"])
 
 
 ##########################################
@@ -559,7 +559,6 @@ with st.sidebar:
     st.markdown(f"{today}")
     todays_standings()
     
-
 
 
 ##########################################
@@ -1684,10 +1683,7 @@ with tab_txgiving:
                             )
                         )
                         st.caption(
-                            "League Impact represents each feature's share of the "
-                            "combined absolute SHAP influence of the top 10 features. "
-                            "Helping and Harming show the percentage of teams with "
-                            "positive or negative average SHAP contributions this season."
+                            "**League Impact** shows how much each factor influences the model's playoff predictions compared with the other top 10 factors. **Helping and Harming** show the percentage of teams whose playoff chances are positively or negatively influenced by that factor this season."
                         )
                         st.altair_chart(
                             mosaic_chart,
@@ -3207,3 +3203,14 @@ with tab_teams:
         #     alt.X()  
         # )
         # st.altair_chart(chart, width="stretch")
+        
+        
+
+# ##########################################
+# ## Teams Tab                            ##
+# ##########################################
+# with tab_whatif:
+
+#     cols = st.columns([1, 3])
+
+#     @st.cache_data(ttl="6h")

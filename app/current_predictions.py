@@ -319,7 +319,6 @@ def fetch_current_predictions(season_id, model_version="v6"):
         if con is not None:
             con.close()
 
-
 # ============================================================
 # FETCH SHAP VALUES
 # ============================================================
@@ -442,10 +441,6 @@ def fetch_shap_summary(season_id, model_version="v6"):
 
         if con is not None:
             con.close()
-
-
-
-
 
 # ============================================================
 # EXTRACT TOP POSITIVE AND NEGATIVE SHAP CONTRIBUTORS
@@ -664,7 +659,6 @@ def calculate_shap_consistency(shap_df):
     )
 
     return shap_long
-
 
 FEATURE_LABELS = {
     "c_corsi_diff": "Current Corsi Differential",
