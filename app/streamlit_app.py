@@ -9,7 +9,9 @@ import traceback
 import altair as alt
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import squarify
+import textwrap
+from datetime import datetime, date
 import matplotlib
 matplotlib.use('Agg')  # Use the Agg backend
 
@@ -140,20 +142,13 @@ st.title("Check This Data")
 st.markdown('''##### <span style="color: #aaaaaa">Explore NHL Advanced Stats, Simply</span>
             ''', unsafe_allow_html=True)
                 
-tab_standings, tab_txgiving, tab_teams = st.tabs(["Standings","Thanksgiving Predictor", "Teams"])
-st.sidebar.markdown("League-Wide Standings")
+tab_txgiving, tab_teams = st.tabs(["Thanksgiving Predictor", "Explore Teams"])
 
 
 ##########################################
-##  Playoff Odds Sidebar                ##
+##  Standings Sidebar                   ##
 ##########################################
 @st.cache_data(show_spinner=True)
-
-
-
-##########################################
-## Standings Tab                        ##
-##########################################
 
 def display_standings():
     try:
@@ -183,6 +178,11 @@ def load_standings(standings):
                         'Points', 'Points Pct', 'Wild Card Rank']
     league_standings_df = standings[selected_columns]
     return league_standings_df
+
+
+##########################################
+## Standings Side Tab                   ##
+##########################################
 
 def todays_standings():
     try:
@@ -394,12 +394,12 @@ def todays_standings():
                 div_standings = []
 
                 for index, row in filtered_standings.iterrows():
-                        team = row['Team']
-                        points = row['Points']
-                        division = row['Division']
-                        games_played = row['Games Played']
-                        logo_url = row['logo']  # SVG logo link
-                        div_standings.append(row)
+                    team = row['Team']
+                    points = row['Points']
+                    division = row['Division']
+                    games_played = row['Games Played']
+                    logo_url = row['logo']  # SVG logo link
+                    div_standings.append(row)
 
                     # Create DataFrame from the collected data
                 return pd.DataFrame(div_standings)
@@ -407,6 +407,7 @@ def todays_standings():
             # Call the function to create the DataFrame
         
         div_standings = create_dataframe(8)
+        
         # #Create visual representation for each team
         team = div_standings['Team']
         points = div_standings['Points']
@@ -419,18 +420,25 @@ def todays_standings():
 
         # ----- HEIGHT & SPACING SETUP -----
         BASE_HEIGHT = 300          # this will now be the TRUE visible range
-        SPACING = 2
+        SPACING = 3
         scale_height = BASE_HEIGHT * SPACING
+        
+
         # Add some padding to top/bottom of the line only (NOT the whole container)
-        LINE_EXTRA = 100  # pixels above + below
+        ## change the left/right of the bar
+        LINE_EXTRA = 50  # pixels above + below
         html_content = f"""
-        <div style="display: flex; flex-direction: column; align-items: flex-start;
-                    position: relative; height: {scale_height}px; margin: 40px 0;">
+        <div style="display: flex; 
+                flex-direction: column; 
+                align-items: flex-start;
+                position: relative; 
+                height: {scale_height}px;
+                margin: 30px 0;">
 
             <div style="
                 position: absolute;
-                left: 9.7%;
-                width: 4px;
+                left: 55px;
+                width: 10px;
                 height: {scale_height + LINE_EXTRA}px;
                 background: linear-gradient(to bottom,  #d9d9d9, #ffffff,#3c6e71,#284b63, #353535 );
                 transform: translateY(-{LINE_EXTRA/2}px);
@@ -457,6 +465,7 @@ def todays_standings():
         }
 
         spread = max(max_points - min_points, 2)
+        
         # Draw each point level
         for point, teams in sorted_standing_points.items():
 
@@ -466,19 +475,25 @@ def todays_standings():
 
             # Label left of the line
             html_content += f"""
-            <div style="position: absolute; left: 0%; top: {position}px;
-                        color: white; font-size: 35px; line-height: 10px;">
+            <div style="position: absolute; 
+                        left: 0%; top: {position}px;
+                        color: white; 
+                        font-size: 35px; 
+                        line-height: 10px;">
                 {point}
             </div>
 
-            <div style="position: absolute; left: 12%; top: {position-25}px;
-                        display: flex; gap: 5px;">               
+            <div style="position: absolute; 
+                        left: 60px;
+                        top: {position-25}px;
+                        display: flex; 
+                        gap: 5px;">               
         
             """
 
             # Team logo circles
             for team_info in teams:
-                tooltip = f"{team_info['team']} — {team_info['division']} Division"
+                tooltip = f"{team_info['team']} - {team_info['division']} Division"
                 html_content += f"""
                 <div title="{tooltip}"
                     style="background-color: white;
@@ -500,9 +515,14 @@ def todays_standings():
 
             # Dot on the vertical line
             html_content += f"""
-            <div style="position: absolute; left: 10%; top: {position}px;
-                        width: 10px; height: 10px; background-color: #FFCDB2;
-                        border-radius: 50%; transform: translateX(-50%);">
+            <div style="position: absolute; 
+                        left: 60px; 
+                        top: {position}px;
+                        width: 10px; 
+                        height: 10px; 
+                        background-color: #FFCDB2;
+                        border-radius: 50%; 
+                        transform: translateX(-50%);">
             </div>
             """
 
@@ -526,14 +546,12 @@ def todays_standings():
 
         components.html(centered_html, height=scale_height + 150, scrolling=False)
 
-
-
     except Exception as e:
         st.error(f"Error loading standings data: {e}")
         return None
 
 
-with tab_standings:
+with st.sidebar:
 
     st.subheader("Current Standings")
 
@@ -541,43 +559,1232 @@ with tab_standings:
     st.markdown(f"{today}")
     todays_standings()
     
+
+
+
 ##########################################
 ## Thanksgiving Tab                     
 ##########################################
-# with tab_txgiving:
+with tab_txgiving:
 
-    # if not pred.empty:
-    #     prob_map = {row["playoff_prob"]: row["tri_code"] for _, row in pred.iterrows()}
+    cols = st.columns([1, 3])
+    @st.cache_data(ttl="6h")
+    def load_full_data(season_id, model_version="v6"):
+        try:
+            df = fetch_current_predictions(
+                season_id=season_id,
+                model_version=model_version
+            )
 
-    #     best_prob, best_team = max(prob_map.items())
-    #     worst_prob, worst_team = min(prob_map.items())
+            # Normalize fields
+            df["label"] = df["tri_code"].str.upper().str.strip()
+            df["team_name"] = df["team_name"].str.strip()
+            df["season"] = df["season_id"].astype(int)
 
-    #     bottom_left_cell = cols[0].container(border=True, height="stretch", vertical_alignment="center")
+            return df
 
-    #     with bottom_left_cell:
-    #         st.subheader("Season Highlights")
-
-    #         mcols = st.columns(2)
-
-    #         mcols[0].metric(
-    #             "Best Probability",
-    #             best_team,
-    #             f"{best_prob*100:.1f}%" 
-    #         )
-
-    #         mcols[1].metric(
-    #             "Worst Probability",
-    #             worst_team,
-    #              f"{worst_prob*100:.1f}%"
-    #         )
-
+        except Exception:
+            st.error("Unable to load data. Please try again later.")
+            st.stop()
+            return None
+        
+    @st.cache_data(ttl="6h")
+    def load_shap_data(season_id, model_version="v6"):
+        
+        return fetch_shap_values(
+            season_id=season_id,
+            model_version=model_version
+        )
 
     
+    
+    @st.cache_data(ttl="6h")
+    def load_shap_summary(season_id, model_version="v6"):
+        return fetch_shap_summary(
+                    season_id=season_id,
+                    model_version=model_version
+                )
+
+    
+        
+    full_df = load_full_data(
+        season_id=20262027,
+        model_version="v6"
+    )
+
+    shap_df = load_shap_data(
+        season_id=20262027,
+        model_version="v6"
+    )
+    
+    shap_summary = load_shap_summary(
+        season_id=20262027,
+        model_version="v6"
+    )
+    
+    # =========================================================
+    #  Division Colors
+    # =========================================================
+    division_colors = {
+        "Atlantic": "#087e8b",
+        "Metropolitan": "#ff5a5f",
+        "Central": "#dcdcdd",
+        "Pacific": "#3c3c3c",
+        "Unknown": "#808080",
+    }
+
+    team_to_division = {
+        # Atlantic
+        "BOS": "Atlantic", "MTL": "Atlantic", "OTT": "Atlantic", "TOR": "Atlantic",
+        "DET": "Atlantic", "BUF": "Atlantic", "TBL": "Atlantic", "FLA": "Atlantic",
+
+        # Metropolitan
+        "NYR": "Metropolitan", "NYI": "Metropolitan", "NJD": "Metropolitan",
+        "WSH": "Metropolitan", "PIT": "Metropolitan", "PHI": "Metropolitan",
+        "CAR": "Metropolitan", "CBJ": "Metropolitan",
+
+        # Central
+        "NSH": "Central", "DAL": "Central", "STL": "Central", "CHI": "Central",
+        "MIN": "Central", "WPG": "Central", "UTA": "Central", "COL": "Central",
+
+        # Pacific
+        "CGY": "Pacific", "EDM": "Pacific", "VAN": "Pacific",
+        "SEA": "Pacific", "SJS": "Pacific", "VGK": "Pacific",
+        "LAK": "Pacific", "ANA": "Pacific",
+
+        # ARI – not used anymore
+        "ARI": "Unknown",
+    }
+
+    # =========================================================
+    #  Inject JS to tag each multiselect chip with class "tag-XXX"
+    # =========================================================
+    st.markdown("""
+    <script>
+    const observer = new MutationObserver(() => {
+        document.querySelectorAll('span[data-baseweb="tag"]').forEach(tag => {
+            const text = tag.innerText.replace("×","").trim();
+            if (text && !tag.classList.contains("tag-" + text)) {
+                tag.classList.add("tag-" + text);
+            }
+        });
+    });
+    observer.observe(document.body, { subtree: true, childList: true });
+    </script>
+    """, unsafe_allow_html=True)
+
+    # =========================================================
+    #  CSS to color the chips based on division
+    # =========================================================
+    css_rules = "<style>"
+
+    for team, div in team_to_division.items():
+        color = division_colors.get(div, "#808080")
+        css_rules += f"""
+        .tag-{team} {{
+            background-color: {color} !important;
+            color: white !important;
+            border-radius: 6px !important;
+        }}
+        """
+
+    css_rules += "</style>"
+
+    st.markdown(css_rules, unsafe_allow_html=True)
+    
+    
+    # =========================================================
+    #  TEAM SELECTION UI
+    # =========================================================
+    TRI_CODES = sorted(full_df["tri_code"].unique())
+    available_labels = sorted(TRI_CODES)
+    SHAP_FEATURE = sorted(
+        shap_summary["feature"].dropna().unique(),
+        key=lambda feature: get_feature_label(feature).casefold()
+    )
+
+    shap_labels = sorted(
+        get_feature_label(feature)
+        for feature in SHAP_FEATURE
+    )
+    # =========================================================
+    # DATE SELECTION
+    # =========================================================
+    predictions_df = full_df.copy()
+
+    predictions_df["game_date"] = pd.to_datetime(
+        predictions_df["game_date"]
+    ).dt.normalize()
+
+    current_date = pd.Timestamp.today().normalize()
+    thanksgiving = pd.Timestamp("2026-11-25")
+
+    available_dates = {
+        "Today": current_date,
+        "Thanksgiving Day": thanksgiving,
+        "Cumulative To Date": current_date,
+        "Cumulative to Thanksgiving": thanksgiving,
+    }
+    date_labels = list(available_dates.keys())
+
+    top_left_cell = cols[0].container(border=True)
+
+    with top_left_cell:
+        st.subheader("Date Selection")
+
+        date_mode = st.pills(
+            "View",
+            options=["Today", "Thanksgiving Day"],
+            default="Today",
+        )
+             
+    
+    predictions_df['game_date'] = pd.to_datetime(predictions_df['game_date']).dt.normalize() 
+
+    # =========================================================
+    # HANDLE DATE MODES
+    # =========================================================
+    if date_mode == "Today":
+
+        selected_date = ["Today"]
+
+        # Find the most recent game date, excluding future games
+        valid_dates = predictions_df.loc[
+            predictions_df['game_date'] <= current_date,
+            'game_date'
+        ].dropna()
+
+        if valid_dates.empty:
+            st.warning("No completed game dates available.")
+            st.stop()
+
+        last_game_date = valid_dates.max()
+
+        # Filter to only games from the latest game day
+        predictions_df = predictions_df[
+            predictions_df['game_date'] == last_game_date
+        ].copy()
+
+        selected_date_ids = [last_game_date]
+        current_date_id = last_game_date
+
+        if predictions_df.empty:
+            st.warning("No games available for the latest game date.")
+            st.stop()
+
+        # Reduce space above the date range box
+        st.markdown(
+            """
+            <style>
+            .st-key-date_range_box {
+                margin-top: -3rem;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+                
+    # ----------------------------------------------------
+    # HANDLE "Thanksgiving Day"
+    # ----------------------------------------------------
+    elif date_mode == "Thanksgiving Day":
+
+        selected_date = ["Thanksgiving Day"]
+        selected_date_ids = [thanksgiving]
+        thanksgiving_date_id = thanksgiving
+
+        # Filter to Thanksgiving games only
+        predictions_df = predictions_df[
+            predictions_df['game_date'] == thanksgiving
+        ].copy()
+
+        if predictions_df.empty:
+            st.warning("Probabilities will be available on November 26, 2026.")
+            st.stop()   
+
+        # Reduce space above the date range box
+        st.markdown(
+            """
+            <style>
+            .st-key-date_range_box {
+                margin-top: -3rem;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+    elif date_mode == "Cumulative To Date":
+
+        selected_date = ["Cumulative To Date"]
+
+        predictions_df = predictions_df[
+            predictions_df["game_date"] <= current_date
+        ].copy()
+
+        selected_date_ids = sorted(
+            predictions_df["game_date"].dropna().unique()
+        )
+
+    elif date_mode == "Cumulative to Thanksgiving":
+
+        selected_date = ["Cumulative to Thanksgiving"]
+
+        predictions_df = predictions_df[
+            predictions_df["game_date"] <= thanksgiving
+        ].copy()
+
+        selected_date_ids = sorted(
+            predictions_df["game_date"].dropna().unique()
+        )
+    # ---------------------------------------------------------
+    # CHECK FOR AVAILABLE DATA
+    # ---------------------------------------------------------
+    if predictions_df.empty:
+        st.warning("No predictions available for this date selection.")
+        st.stop()
+
+    # =========================================================
+    # FILTER DATA
+    # =========================================================
+    if selected_date_ids:
+        predictions_df = predictions_df[predictions_df["game_date"].isin(selected_date_ids)]
+
+    # =========================================================
+    # RIGHT PANEL — ALTair Visualization
+    # =========================================================
+    right_cell = cols[1].container(border=True, height="stretch", vertical_alignment="top")
+
+    team_colors = {
+    "ANA": "#F47A38",
+    "ARI": "#8C2633",
+    "BOS": "#FFB81C",
+    "BUF": "#002654",
+    "CAR": "#CC0000",
+    "CBJ": "#002654",
+    "CGY": "#C8102E",
+    "CHI": "#CF0A2C",
+    "COL": "#6F263D",
+    "DAL": "#006847",
+    "DET": "#CE1126",
+    "EDM": "#FF4C00",
+    "FLA": "#B9975B",
+    "LAK": "#F7F3F3",
+    "MIN": "#154734",
+    "MTL": "#AF1E2D",
+    "NJD": "#CE1126",
+    "NSH": "#FFB81C",
+    "NYI": "#00529B",
+    "NYR": "#0038A8",
+    "OTT": "#DA1A32",
+    "PHI": "#F74902",
+    "PIT": "#FCB514",
+    "SEA": "#99D9D9",
+    "SJS": "#006D75",
+    "STL": "#002F87",
+    "TBL": "#002868",
+    "TOR": "#00205B",
+    "UTA": "#6F2DA8",
+    "VAN": "#00205B",
+    "VGK": "#B4975A",
+    "WPG": "#041E42",
+    "WSH": "#C8102E",
+    }
 
 
+    with right_cell:
+        st.subheader("Playoff Probabilities")
+
+        if predictions_df.empty:
+            st.warning("No data to plot.")
+        else:
+
+            # ---------------------------------------------------------------
+            # Build dynamic domain & range for selected teams ONLY
+            # ---------------------------------------------------------------
+            color_domain = [t for t in predictions_df["tri_code"].unique() if t in team_colors]
+            color_range = [team_colors[t] for t in color_domain]
+
+                        
+            # ---------------------------------------------------------------
+            # TODAY / THANKSGIVING DAY → Bar Chart with Model Probability Ranges
+            # ---------------------------------------------------------------
+            if date_mode in ["Today", "Thanksgiving Day"]:
+
+                date_label = selected_date[0]
+
+                # Already filtered by date_mode
+                chart_prediction = predictions_df.copy()
+
+                # Calculate lower and upper bounds between models
+                chart_prediction["prob_lower"] = chart_prediction[
+                    ["playoff_prob_xgb", "playoff_prob_rf"]
+                ].min(axis=1)
+
+                chart_prediction["prob_upper"] = chart_prediction[
+                    ["playoff_prob_xgb", "playoff_prob_rf"]
+                ].max(axis=1)
+
+                # Sort teams by displayed playoff probability
+                chart_prediction = chart_prediction.sort_values(
+                    by="playoff_prob_display",
+                    ascending=False
+                )
+
+                team_order = chart_prediction["tri_code"].tolist()
+                
+                # ----------------------------------------------------
+                # BASE CHART
+                # ----------------------------------------------------
+                base = alt.Chart(chart_prediction).encode(
+                    x=alt.X(
+                        "tri_code:N",
+                        sort=team_order,
+                        title="Team",
+                        axis=alt.Axis(
+                            labelAngle=-45,
+                            labelOverlap=False,
+                            labelLimit=100,
+                            labelPadding=8,
+                            labelExpr="""
+                                indexof(
+                                    [
+                                        'ANA','BOS','BUF','CAR','CBJ','CGY','CHI','COL',
+                                        'DAL','DET','EDM','FLA','LAK','MIN','MTL','NJD',
+                                        'NSH','NYI','NYR','OTT','PHI','PIT','SEA','SJS',
+                                        'STL','TBL','TOR','UTA','VAN','VGK','WPG','WSH'
+                                    ],
+                                    datum.label
+                                ) % 2 == 0
+                                ? datum.label
+                                : '  ' + datum.label
+                            """
+                        )
+                    )
+                )
+
+                # ----------------------------------------------------
+                # BARS → Displayed Playoff Probability Today
+                # ----------------------------------------------------
+                bars = base.mark_bar().encode(
+                    y=alt.Y(
+                        "playoff_prob_display:Q",
+                        title="Playoff Probability",
+                        scale=alt.Scale(domain=[0, 1]),
+                        axis=alt.Axis(format=".0%")
+                    ),
+                    color=alt.Color(
+                        "tri_code:N",
+                        title="Teams",
+                        scale=alt.Scale(
+                            domain=color_domain,
+                            range=color_range
+                        ),
+                        legend=None
+                    ),
+                    tooltip=[
+                        alt.Tooltip("team_name:N", title="Team"),
+                        alt.Tooltip(
+                            "playoff_prob_display:Q",
+                            title="Displayed Probability",
+                            format=".1%"
+                        ),
+                        alt.Tooltip(
+                            "playoff_prob_xgb:Q",
+                            title="XGP Model",
+                            format=".1%"
+                        ),
+                        alt.Tooltip(
+                            "playoff_prob_rf:Q",
+                            title="RF Model",
+                            format=".1%"
+                        ),
+                        alt.Tooltip(
+                            "playoff_tier:N",
+                            title="Playoff Prediction"
+                        )
+                    ]
+                )
+
+                # ----------------------------------------------------
+                # ERROR BARS → Range Between XGP and RF Models
+                # ----------------------------------------------------
+                error_bars = base.mark_errorbar(
+                    ticks=False,
+                    color="white"
+                ).encode(
+                    y=alt.Y(
+                        "prob_lower:Q",
+                        scale=alt.Scale(domain=[0, 1])
+                    ),
+                    y2="prob_upper:Q"
+                )
+
+                # ----------------------------------------------------
+                # COMBINE CHARTS
+                # ----------------------------------------------------
+                combined_chart = (
+                    alt.layer(bars, error_bars)
+                    .properties(
+                        title=f"Playoff Probability — {date_label}",
+                        height=500
+                    )
+                    .configure_legend(
+                        orient="bottom",
+                        padding=0,
+                        labelLimit=600,
+                        title=None
+                    )
+                )
+
+                st.altair_chart(combined_chart, width="stretch")
+                
+        with right_cell:
+            st.divider()
+                            
+            # ====================================================
+            # COLLECTIVE PLAYOFF DRIVERS — CUMULATIVE SHAP
+            # ====================================================
+            if date_mode in ["Today", "Thanksgiving Day"]:
+
+                st.subheader("Collective Playoff Drivers")
+                # ------------------------------------------------
+                # 1. FILTER SHAP DATA TO THE SELECTED PERIOD
+                # ------------------------------------------------
+                filtered_shap = shap_df.copy()
+
+                filtered_shap["game_date"] = pd.to_datetime(
+                    filtered_shap["game_date"]
+                ).dt.normalize()
+
+                # Start of available season data
+                start_date = filtered_shap["game_date"].min()
+
+                # End date based on existing selection
+                end_date = (
+                    current_date
+                    if date_mode == "Today"
+                    else thanksgiving
+                )
+
+                # Cumulative SHAP data
+                filtered_shap = filtered_shap[
+                    filtered_shap["game_date"].between(
+                        start_date,
+                        end_date
+                    )
+                ].copy()
+                # ------------------------------------------------
+                # 2. IDENTIFY SHAP FEATURE COLUMNS
+                # ------------------------------------------------
+                shap_cols = [
+                    c for c in filtered_shap.columns
+                    if c.startswith("shap_")
+                    and c != "shap_base_value"
+                ]
+
+                # ------------------------------------------------
+                # 3. CALCULATE PER-TEAM FEATURE IMPACT
+                # ------------------------------------------------
+                # Each team receives equal weight, regardless
+                # of how many snapshots it has.
+                #
+                # Replace "tri_code" if your SHAP dataframe
+                # uses another team identifier.
+
+                if filtered_shap.empty or not shap_cols:
+                    st.info("No SHAP data available for this period.")
+
+                else:
+
+                    filtered_shap[shap_cols] = (
+                        filtered_shap[shap_cols]
+                        .apply(pd.to_numeric, errors="coerce")
+                    )
+
+                    # Absolute impact averaged over time per team
+                    team_abs = (
+                        filtered_shap
+                        .assign(
+                            **{
+                                c: filtered_shap[c].abs()
+                                for c in shap_cols
+                            }
+                        )
+                        .groupby("tri_code")[shap_cols]
+                        .mean()
+                    )
+
+                    # Signed impact averaged over time per team
+                    team_signed = (
+                        filtered_shap
+                        .groupby("tri_code")[shap_cols]
+                        .mean()
+                    )
+
+                    # ------------------------------------------------
+                    # 4. RANK FEATURES BY LEAGUE-WIDE ABSOLUTE IMPACT
+                    # ------------------------------------------------
+                    feature_impact = (
+                        team_abs.mean()
+                        .sort_values(ascending=False)
+                        .head(10)
+                    )
+
+                    # ------------------------------------------------
+                    # 5. HELPING / HARMING PERCENTAGES
+                    # ------------------------------------------------
+                    records = []
+
+                    for feature, impact in feature_impact.items():
+
+                        values = team_signed[feature].dropna()
+
+                        # Zero impact is neutral
+                        total_teams = len(values)
+
+                        if total_teams == 0:
+                            continue
+
+                        helping = (values > 0).sum()
+                        harming = (values < 0).sum()
+                        neutral = (values == 0).sum()
+
+                        records.append({
+                            "feature": feature,
+                            "impact": float(impact),
+                            "helping_pct": helping / total_teams * 100,
+                            "harming_pct": harming / total_teams * 100,
+                            "neutral_pct": neutral / total_teams * 100,
+                            "teams": total_teams
+                        })
+
+                    mosaic_df = pd.DataFrame(records)
+
+                    if mosaic_df.empty or mosaic_df["impact"].sum() <= 0:
+                        st.info("No measurable SHAP impact available.")
+
+                    else:
+
+                        # --------------------------------------------
+                        # 6. CALCULATE RELATIVE IMPACT
+                        # --------------------------------------------
+                        mosaic_df["impact_share"] = (
+                            mosaic_df["impact"]
+                            / mosaic_df["impact"].sum()
+                            * 100
+                        )
+
+                        # --------------------------------------------
+                        # 7. GENERATE MOSAIC RECTANGLES
+                        # --------------------------------------------
+                        # Coordinates use a 100 x 100 layout.
+                        MOSAIC_WIDTH = 350
+                        MOSAIC_HEIGHT = 500
+
+                        sizes = squarify.normalize_sizes(
+                            mosaic_df["impact"].tolist(),
+                            MOSAIC_WIDTH,
+                            MOSAIC_HEIGHT
+                        )
+
+                        rectangles = squarify.squarify(
+                            sizes,
+                            0,
+                            0,
+                            MOSAIC_WIDTH,
+                            MOSAIC_HEIGHT
+                        )
+
+                        for key in ["x", "y", "dx", "dy"]:
+                            mosaic_df[key] = [
+                                rect[key] for rect in rectangles
+                            ]
+
+                        mosaic_df["x2"] = (
+                            mosaic_df["x"] + mosaic_df["dx"]
+                        )
+
+                        mosaic_df["y2"] = (
+                            mosaic_df["y"] + mosaic_df["dy"]
+                        )
+
+                        mosaic_df["center_x"] = (
+                            mosaic_df["x"] + mosaic_df["dx"] / 2
+                        )
+
+                        mosaic_df["center_y"] = (
+                            mosaic_df["y"] + mosaic_df["dy"] / 2
+                        )
+
+                                                
+                        # --------------------------------------------
+                        # 8. PREPARE LABELS
+                        # --------------------------------------------
+
+                        mosaic_df["feature_label"] = (
+                            mosaic_df["feature"]
+                            .str.removeprefix("shap_")
+                            .apply(get_feature_label)
+                        )
+                        
+                        # Get existing feature descriptions for tooltips
+                        mosaic_df["feature_description"] = (
+                            mosaic_df["feature"]
+                            .str.removeprefix("shap_")
+                            .apply(get_feature_description)
+                        )
+                        
+
+                        # Wrap long feature names
+                        mosaic_df["feature_label_wrapped"] = (
+                            mosaic_df["feature_label"]
+                            .apply(
+                                lambda label: "\n".join(
+                                    textwrap.wrap(
+                                        str(label),
+                                        width=15,
+                                        break_long_words=False
+                                    )
+                                )
+                            )
+                        )
+
+                        # Count wrapped lines
+                        mosaic_df["feature_lines"] = (
+                            mosaic_df["feature_label_wrapped"]
+                            .str.count("\n") + 1
+                        )
+
+                        # --------------------------------------------
+                        # CREATE TEXT LABELS
+                        # --------------------------------------------
+
+                        mosaic_df["impact_label"] = (
+                            "League Impact\n"
+                            + mosaic_df["impact_share"].round(1).astype(str)
+                            + "%"
+                        )
+                        mosaic_df["impact_pct"] = mosaic_df["impact"] * 100
+
+                        mosaic_df["help_label"] = (
+                            "Helped: "
+                            + mosaic_df["helping_pct"].round(1).astype(str)
+                            + "%"
+                        )
+
+                        mosaic_df["harm_label"] = (
+                            "Hurt: "
+                            + mosaic_df["harming_pct"].round(1).astype(str)
+                            + "%"
+                        )
+
+                        # --------------------------------------------
+                        # DYNAMIC FONT SIZES
+                        # --------------------------------------------
+
+                        # Use the smaller rectangle dimension
+                        mosaic_df["box_size"] = (
+                            mosaic_df[["dx", "dy"]].min(axis=1)
+                        )
+
+                        min_size = mosaic_df["box_size"].min()
+                        max_size = mosaic_df["box_size"].max()
+
+                        # Normalize rectangle sizes between 0 and 1
+                        if max_size > min_size:
+                            size_factor = (
+                                (mosaic_df["box_size"] - min_size)
+                                / (max_size - min_size)
+                            )
+                        else:
+                            size_factor = pd.Series(
+                                0.5,
+                                index=mosaic_df.index
+                            )
+
+                        # Initial font sizes
+                        # Feature names: 12–24px
+                        mosaic_df["feature_font_size"] = (
+                            12 + size_factor * 12
+                        )
+
+                        # League Impact: 10–17px
+                        mosaic_df["impact_font_size"] = (
+                            10 + size_factor * 7
+                        )
+
+                        # Helped / Hurt: 9–14px
+                        mosaic_df["detail_font_size"] = (
+                            9 + size_factor * 5
+                        )
+
+                        # --------------------------------------------
+                        # FIT TEXT TO RECTANGLE HEIGHT
+                        # --------------------------------------------
+
+                        CHART_HEIGHT = 650
+
+                        # Convert Squarify coordinates to rendered pixels
+                        mosaic_df["box_height_px"] = (
+                            mosaic_df["dy"]
+                            / MOSAIC_HEIGHT
+                            * CHART_HEIGHT
+                        )
+
+                        # Leave vertical padding inside rectangles
+                        mosaic_df["available_height"] = (
+                            mosaic_df["box_height_px"] - 20
+                        ).clip(lower=1)
+
+                        # --------------------------------------------
+                        # ESTIMATE INITIAL TEXT HEIGHTS
+                        # --------------------------------------------
+
+                        mosaic_df["feature_line_height"] = (
+                            mosaic_df["feature_font_size"] * 1.4
+                        )
+
+                        mosaic_df["impact_line_height"] = (
+                            mosaic_df["impact_font_size"] * 1.5
+                        )
+
+                        mosaic_df["feature_height"] = (
+                            mosaic_df["feature_lines"]
+                            * mosaic_df["feature_line_height"]
+                        )
+
+                        # League Impact always contains two lines
+                        mosaic_df["impact_height"] = (
+                            2 * mosaic_df["impact_line_height"]
+                        )
+
+                        # Helped and Hurt are single lines
+                        mosaic_df["detail_height"] = (
+                            mosaic_df["detail_font_size"] * 1.3
+                        )
+
+                        # Initial spacing between sections
+                        GAP_FEATURE = -10
+                        GAP_IMPACT = 20
+                        GAP_DETAIL = 2
+
+                        # Total estimated height before scaling
+                        mosaic_df["total_text_height"] = (
+                            mosaic_df["feature_height"]
+                            + mosaic_df["impact_height"]
+                            + mosaic_df["detail_height"] * 2
+                            + GAP_FEATURE
+                            + (mosaic_df["feature_lines"] - 1) * 12
+                            + GAP_IMPACT
+                            + GAP_DETAIL
+                        )
+
+                        # --------------------------------------------
+                        # SCALE TEXT TO FIT SMALL RECTANGLES
+                        # --------------------------------------------
+
+                        mosaic_df["text_scale"] = (
+                            mosaic_df["available_height"]
+                            / mosaic_df["total_text_height"]
+                        ).clip(upper=1.0)
+
+                        # Apply scaling to all font sizes
+                        for col in [
+                            "feature_font_size",
+                            "impact_font_size",
+                            "detail_font_size"
+                        ]:
+                            mosaic_df[col] *= mosaic_df["text_scale"]
+
+                        # --------------------------------------------
+                        # RECALCULATE HEIGHTS AFTER SCALING
+                        # --------------------------------------------
+
+                        mosaic_df["feature_line_height"] = (
+                            mosaic_df["feature_font_size"] * 1.2
+                        )
+
+                        mosaic_df["impact_line_height"] = (
+                            mosaic_df["impact_font_size"] * 1.5
+                        )
+
+                        mosaic_df["feature_height"] = (
+                            mosaic_df["feature_lines"]
+                            * mosaic_df["feature_line_height"]
+                        )
+
+                        mosaic_df["impact_height"] = (
+                            2 * mosaic_df["impact_line_height"]
+                        )
+
+                        mosaic_df["detail_height"] = (
+                            mosaic_df["detail_font_size"] * 1.3
+                        )
+
+                        # Scale spacing proportionally
+                        mosaic_df["gap_feature"] = (
+                            GAP_FEATURE * mosaic_df["text_scale"]
+                        )
+                        mosaic_df["gap_impact"] = (
+                            GAP_IMPACT * mosaic_df["text_scale"]
+                        )
+
+                        mosaic_df["gap_detail"] = (
+                            GAP_DETAIL * mosaic_df["text_scale"]
+                        )
+
+                        # --------------------------------------------
+                        # CENTER COMPLETE TEXT GROUP VERTICALLY
+                        # --------------------------------------------
+
+                        # Total height after scaling
+                        mosaic_df["total_text_height"] = (
+                            mosaic_df["feature_height"]
+                            + mosaic_df["gap_feature"]
+                            + mosaic_df["impact_height"]
+                            + mosaic_df["gap_impact"]
+                            + mosaic_df["detail_height"] * 2
+                            + mosaic_df["gap_detail"]
+                        )
+
+                        # Top of the complete text group,
+                        # relative to the rectangle center
+                        mosaic_df["text_top"] = (
+                            -mosaic_df["total_text_height"] / 2
+                        )
+
+                        # Feature label center
+                        mosaic_df["feature_dy"] = mosaic_df["text_top"]
+
+                        # League Impact center
+                        # Always begins after the full feature label,
+                        # regardless of the number of wrapped lines
+                        mosaic_df["impact_dy"] = (
+                            mosaic_df["text_top"]
+                            + mosaic_df["feature_height"]
+                            + mosaic_df["gap_feature"]
+                            + mosaic_df["impact_height"] / 2
+                        )
+
+                        # Helped center
+                        mosaic_df["help_dy"] = (
+                            mosaic_df["text_top"]
+                            + mosaic_df["feature_height"]
+                            + mosaic_df["gap_feature"]
+                            + mosaic_df["impact_height"]
+                            + mosaic_df["gap_impact"]
+                            + mosaic_df["detail_height"] / 2
+                        )
+
+                        # Hurt center
+                        mosaic_df["harm_dy"] = (
+                            mosaic_df["help_dy"]
+                            + mosaic_df["detail_height"]
+                            + mosaic_df["gap_detail"]
+                        )
 
 
+                        # --------------------------------------------
+                        # 9. BASE MOSAIC
+                        # --------------------------------------------
+                        mosaic_base = alt.Chart(mosaic_df)
 
+                        x_scale = alt.Scale(domain=[0, 350])
+                        y_scale = alt.Scale(
+                            domain=[0, 500],
+                            reverse=True
+                        )
+
+                        rectangles_chart = (
+                            mosaic_base
+                            .mark_rect(
+                                stroke="#111111",
+                                strokeWidth=3,
+                                cornerRadius=4
+                            )
+                            .encode(
+                                x=alt.X(
+                                    "x:Q",
+                                    scale=x_scale,
+                                    axis=None
+                                ),
+                                x2="x2:Q",
+                                y=alt.Y(
+                                    "y:Q",
+                                    scale=y_scale,
+                                    axis=None
+                                ),
+                                y2="y2:Q",
+                                color=alt.Color(
+                                    "impact_share:Q",
+                                    scale=alt.Scale(
+                                        domain=[
+                                            mosaic_df["impact_share"].min(),
+                                            mosaic_df["impact_share"].max()
+                                        ],
+                                        range=[
+                                            "#aec3b0",
+                                            "#81b29a",
+                                            "#3c6e71",
+                                            "#427aa1",
+                                            "#284b63",
+                                            "#353535"
+                                        ],
+                                        interpolate="rgb"
+                                    ),
+                                    legend=None
+                                ),
+                                
+                                tooltip=[
+                                    alt.Tooltip(
+                                        "feature_description:N",
+                                        title="What This Measures: "
+                                    ),
+                
+                                ]
+                            )
+                        )
+
+                        # --------------------------------------------
+                        # 10. TEXT LABELS INSIDE RECTANGLES
+                        # --------------------------------------------
+
+                        label_base = mosaic_base.encode(
+                            x=alt.X(
+                                "center_x:Q",
+                                scale=x_scale,
+                                axis=None
+                            ),
+                            y=alt.Y(
+                                "center_y:Q",
+                                scale=y_scale,
+                                axis=None
+                            ),
+                            tooltip=[]
+                        )
+
+                        # --------------------------------------------
+                        # FEATURE NAME
+                        # --------------------------------------------
+
+                        feature_text = (
+                            label_base
+                            .mark_text(
+                                fontWeight="bold",
+                                color="white",
+                                dy=alt.ExprRef(expr="datum.feature_dy"),
+                                lineBreak="\n",
+                                lineHeight=alt.ExprRef(expr="datum.feature_line_height"),
+                                align="center",
+                                baseline="top"
+                            )
+                            .encode(
+                                text="feature_label_wrapped:N",
+                                size=alt.Size(
+                                    "feature_font_size:Q",
+                                    scale=None,
+                                    legend=None
+                                )
+                            )
+                        )
+
+                        # --------------------------------------------
+                        # LEAGUE IMPACT
+                        # --------------------------------------------
+
+                        impact_text = (
+                            label_base
+                            .mark_text(
+                                fontWeight="bold",
+                                color="white",
+                                dy=alt.ExprRef(expr="datum.impact_dy"),
+                                lineBreak="\n",
+                                lineHeight=alt.ExprRef(
+                                    expr="datum.impact_line_height"),
+                                align="center",
+                                baseline="middle"
+                            )
+                            .encode(
+                                text="impact_label:N",
+                                size=alt.Size(
+                                    "impact_font_size:Q",
+                                    scale=None,
+                                    legend=None
+                                )
+                            )
+                        )
+
+                        # --------------------------------------------
+                        # TEAMS HELPED
+                        # --------------------------------------------
+
+                        help_text = (
+                            label_base
+                            .mark_text(
+                                color="white",
+                                dy=alt.ExprRef(
+                                    expr="datum.help_dy"),
+                                align="center",
+                                baseline="middle"
+                            )
+                            .encode(
+                                text="help_label:N",
+                                size=alt.Size(
+                                    "detail_font_size:Q",
+                                    scale=None,
+                                    legend=None
+                                )
+                            )
+                        )
+
+                        # --------------------------------------------
+                        # TEAMS HURT
+                        # --------------------------------------------
+
+                        harm_text = (
+                            label_base
+                            .mark_text(
+                                color="white",
+                                dy=alt.ExprRef(
+                                    expr="datum.harm_dy"
+                                ),
+                                align="center",
+                                baseline="middle"
+                            )
+                            .encode(
+                                text="harm_label:N",
+                                size=alt.Size(
+                                    "detail_font_size:Q",
+                                    scale=None,
+                                    legend=None
+                                )
+                            )
+                        )
+                        # --------------------------------------------
+                        # 11. COMBINE MOSAIC
+                        # --------------------------------------------
+                        mosaic_chart = (
+                            alt.layer(
+                                rectangles_chart,
+                                feature_text,
+                                impact_text,
+                                help_text,
+                                harm_text
+                            )
+                            .properties(
+                                title=(
+                                    "Top 10 League-Wide Playoff Drivers"
+                                    f" — {date_label}"
+                                ),
+                                width="container",
+                                height=650
+                            )
+                            .configure_view(
+                                stroke=None
+                            )
+                        )
+                        st.caption(
+                            "League Impact represents each feature's share of the "
+                            "combined absolute SHAP influence of the top 10 features. "
+                            "Helping and Harming show the percentage of teams with "
+                            "positive or negative average SHAP contributions this season."
+                        )
+                        st.altair_chart(
+                            mosaic_chart,
+                            width="stretch"
+                        )
+
+
+    if not predictions_df.empty:
+
+        # Keep team names and probabilities for each tier
+        columns = ["team_name", "playoff_prob_display"]
+
+        lock_teams = predictions_df.loc[predictions_df["playoff_tier"] == "Lock", columns].sort_values("playoff_prob_display", ascending=False)
+
+        likely_teams = predictions_df.loc[predictions_df["playoff_tier"] == "Likely",columns].sort_values("playoff_prob_display", ascending=False)
+
+        bubble_teams = predictions_df.loc[predictions_df["playoff_tier"] == "Bubble", columns].sort_values("playoff_prob_display", ascending=False)
+
+        danger_teams = predictions_df.loc[predictions_df["playoff_tier"] == "Danger",columns].sort_values("playoff_prob_display", ascending=False)
+
+        long_shot_teams = predictions_df.loc[predictions_df["playoff_tier"] == "Long Shot",columns].sort_values("playoff_prob_display", ascending=False)
+
+        bottom_left_cell = cols[0].container(border=True, height="stretch", vertical_alignment="center")
+           
+        with bottom_left_cell:
+            st.subheader("Playoff Tiers")
+            st.badge(
+                "Lock",
+                icon ="🔒",
+                color = "green",
+                width = "stretch",
+                help = "These teams have a probability range of 85%–100%")
+            
+            teams_list = "\n".join(
+                f"- {row['team_name']}: **{row['playoff_prob_display']:.1%}**"
+                for _, row in lock_teams.iterrows()
+            )
+
+            st.markdown(teams_list)
+            
+            st.badge(
+                "Likely",
+                icon ="✅",
+                color = "blue",
+                width = "stretch",
+                help = "These teams have a probability range of 65%-<85%")
+            
+            teams_list = "\n".join(
+                f"- {row['team_name']}: **{row['playoff_prob_display']:.1%}**"
+                for _, row in likely_teams.iterrows()
+            )
+
+            st.markdown(teams_list)
+            
+            st.badge(
+                "Bubble",
+                icon ="🫧",
+                color = "yellow",
+                width = "stretch",
+                help = "These teams have a probability range of 45%–<65%")
+            
+            teams_list = "\n".join(
+                f"- {row['team_name']}: **{row['playoff_prob_display']:.1%}**"
+                for _, row in bubble_teams.iterrows()
+            )
+
+            st.markdown(teams_list)
+            
+            st.badge(
+                "Danger",
+                icon ="⚠️",
+                color = "orange",
+                width = "stretch",
+                help = "These teams have a probability range of 25%–<45%")
+            
+            teams_list = "\n".join(
+                f"- {row['team_name']}: **{row['playoff_prob_display']:.1%}**"
+                for _, row in danger_teams.iterrows()
+            )
+
+            st.markdown(teams_list)
+            
+            
+            st.badge(
+                "Long Shot",
+                icon ="❌",
+                color = "red",
+                width = "stretch",
+                help = "These teams have a probability range of 0%–<25%")
+            
+            teams_list = "\n".join(
+                f"- {row['team_name']}: **{row['playoff_prob_display']:.1%}**"
+                for _, row in long_shot_teams.iterrows()
+            )
+
+            st.markdown(teams_list)
+            
 
 ##########################################
 ## Teams Tab                            ##
@@ -781,7 +1988,7 @@ with tab_teams:
         st.subheader("Season Selection")
 
         season_mode = st.pills(
-            "Mode",
+            "View",
             options=["Current Season", "All Seasons", "Custom Selection"],
             default="Current Season",
         )
@@ -1713,7 +2920,7 @@ with tab_teams:
                 
 
     # =========================================================
-    # BEST + WORST PLAYOFF PROBABILITY
+    # BEST + WORST PLAYOFF PROBABILITY -- FIX THIS 
     # =========================================================
     if not pred.empty:
 

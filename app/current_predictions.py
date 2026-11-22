@@ -807,702 +807,101 @@ FEATURE_DESCRIPTIONS = {
     # --------------------------------------------------------
 
     "c_corsi_diff": (
-        "Compares a team's shot attempts with those of its opponents. "
-        "Green means this measure is helping its playoff chances. "
-        "Red means it is hurting them."
+        "Corsi is a way to measure a team's possession of the puck. This feature compares all shot attempts made by the team to all shot attempts made against the team over the course of the season. "
+        "If the team's cumulative shot attempts for exceeds cumulative shots against, playoff chances improve."
     ),
 
     "c_hd_goals": (
-        "Tracks goals scored from dangerous scoring areas. "
-        "Green means this scoring is helping the team's playoff outlook. "
-        "Red means it is working against it."
+        "The cumulative number of goals for the team from high danger scoring areas. The more goals scored here by the team improves playoff chances."
     ),
 
     "c_hd_sog": (
-        "Counts shots on goal from dangerous scoring areas. "
-        "Green means these chances are helping the team's playoff outlook. "
-        "Red means they are hurting it."
+        "A cumulative count of shots on goal by the team from dangerous scoring areas. More shots on goal in this location improves playoff chances."
     ),
 
     "c_HDCA": (
-        "Measures dangerous scoring chances allowed to opponents. "
-        "Green means this defensive measure is helping the team's playoff chances. "
-        "Red means it is hurting them."
+        "The cumulative number of high danger scoring chances against the team over the course of the season. More scoring chances against the team hurts playoff chances. "
     ),
 
     "c_HDCF": (
-        "Measures dangerous scoring chances created by the team. "
-        "Green means these chances are helping its playoff outlook. "
-        "Red means they are hurting it."
+        "The cumulative number of high-danger scoring chances created by the team over the season. "
+        "Creating more chances from dangerous areas generally improves playoff chances."
     ),
 
     "c_ld_against": (
-        "Tracks goals or chances allowed from less dangerous areas, "
-        "depending on the underlying statistic. "
-        "Green means this measure is helping the team's playoff outlook. "
-        "Red means it is hurting it."
+        "Tracks the team's cumulative low-danger opportunities allowed to opponents. Allowing fewer "
+        "opportunities from these areas generally supports playoff chances, although the impact is "
+        "usually smaller than allowing high-danger chances."
     ),
 
     "c_ld_goals": (
-        "Counts goals scored from less dangerous shooting areas. "
-        "Green means this scoring is helping the team's playoff chances. "
-        "Red means it is hurting them."
+      "The cumulative number of goals scored by the team from low-danger areas. Scoring more goals "
+        "from these locations improves playoff chances."
     ),
 
     "c_ld_sog": (
-        "Counts shots on goal from less dangerous areas. "
-        "Green means this measure is helping the team's playoff outlook. "
-        "Red means it is hurting it."
+          "The cumulative number of shots on goal taken by the team from low-danger areas. More shots "
+        "can support playoff chances, but these attempts are less likely to become goals than "
+        "high-danger shots."
     ),
 
     "c_LDCA": (
-        "Counts low-danger scoring chances allowed to opponents. "
-        "Green means this defensive measure is helping the team's playoff outlook. "
-        "Red means it is hurting it."
+        "The cumulative number of low-danger scoring chances allowed to opponents. Allowing fewer "
+        "chances helps limit opposing offense and generally supports playoff chances."
     ),
 
     "c_md_goals": (
-        "Counts goals scored from moderately dangerous areas. "
-        "Green means this scoring is helping the team's playoff chances. "
-        "Red means it is hurting them."
+        "The cumulative number of goals scored by the team from medium-danger areas. More goals from "
+        "these areas improve playoff chances."
     ),
 
     "c_md_sog": (
-        "Counts shots on goal from moderately dangerous areas. "
-        "Green means these shots are helping the team's playoff outlook. "
-        "Red means they are hurting it."
+        "The cumulative number of shots on goal taken by the team from medium-danger areas. "
+        "Generating more of these shots generally supports playoff chances by creating scoring "
+        "opportunities."
     ),
 
     "c_pdo": (
-        "Combines shooting percentage and save percentage. "
-        "It gives a snapshot of how well a team is finishing chances "
-        "and stopping shots. Green means this combination is helping "
-        "its playoff outlook. Red means it is hurting it."
+       "PDO combines a team's shooting percentage and save percentage to show how effectively it "
+        "scores on its shots and stops opponents' shots. A higher PDO generally supports playoff "
+        "chances, although unusually high or low values can be difficult to sustain."
     ),
 
     "c_pp_ga": (
-        "Counts goals allowed while the opponent is on the power play. "
-        "Green means this measure is helping the team's playoff outlook. "
-        "Red means it is hurting it."
+        "The cumulative number of goals allowed by the team during its own power plays. Allowing "
+        "fewer shorthanded goals to opponents helps protect scoring advantages and improves playoff "
+        "chances."
     ),
 
     "c_pp_net_g": (
-        "Compares power play goals scored with power play goals allowed. "
-        "Green means this balance is helping the team's playoff chances. "
-        "Red means it is hurting them."
+        "The cumulative difference between goals scored and goals allowed during the team's power "
+        "plays. A larger positive difference means the power play is producing more goals than it "
+        "concedes, improving playoff chances."
     ),
 
     "c_rush_diff": (
-        "Compares scoring opportunities created and allowed off the rush. "
-        "Green means this balance is helping the team's playoff outlook. "
-        "Red means it is hurting it."
+        "The cumulative difference between rush opportunities created by the team and those allowed "
+        "to opponents. Creating more rush opportunities than the team allows generally improves "
+        "playoff chances."
     ),
-
+    
     "c_rush_shots_against": (
-        "Counts shots allowed when opponents attack quickly off the rush. "
-        "Green means this measure is helping the team's playoff outlook. "
-        "Red means it is hurting it."
+         "The cumulative number of shots on goal allowed when opponents attack off the rush. Allowing "
+        "fewer rush shots reduces dangerous scoring opportunities and generally improves playoff "
+        "chances."
     ),
 
     "c_rush_shots_for": (
-        "Counts shots created when the team attacks quickly off the rush. "
-        "Green means these attacks are helping its playoff outlook. "
-        "Red means they are hurting it."
+        "The cumulative number of shots on goal generated when the team attacks off the rush. More "
+        "rush shots create additional scoring opportunities and generally improve playoff chances."
+
     ),
 
     "c_shot_pct": (
-        "Shows how often a team's shots on goal become goals. "
-        "Green means its shooting results are helping its playoff chances. "
-        "Red means they are hurting them."
-    ),
-
-    "c_shots_diff": (
-        "Compares shots on goal taken with shots allowed. "
-        "Green means this balance is helping the team's playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "c_sv_pct": (
-        "Shows the percentage of shots the team's goalies stop. "
-        "Green means goaltending results are helping its playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "c_times_sh": (
-        "Counts how often a team has been shorthanded. "
-        "Green means this measure is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # CONFERENCE AND DIVISION
-    # --------------------------------------------------------
-
-    "conf_playoff_chance_baseline": (
-        "Represents the model's starting playoff outlook based on "
-        "conference-related information. Green means this starting "
-        "point is helping the team's prediction. Red means it is "
-        "lowering the prediction."
-    ),
-
-    "conference_home_rank": (
-        "Ranks teams in their conference by home performance. "
-        "Green means the team's home ranking is helping its playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "conference_rank": (
-        "Shows where a team stands among the teams in its conference. "
-        "Green means its conference position is helping its playoff "
-        "chances. Red means it is hurting them."
-    ),
-
-    "conference_road_rank": (
-        "Ranks teams in their conference by road performance. "
-        "Green means the team's road ranking is helping its playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "conference_team_count": (
-        "Shows how many teams are included in the conference comparison. "
-        "Green means this information is raising the team's predicted "
-        "playoff chances. Red means it is lowering them."
-    ),
-
-    "division_home_rank": (
-        "Shows how a team's home performance ranks within its division. "
-        "Green means this ranking is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "division_rank": (
-        "Shows where a team stands in its division. "
-        "Green means its division position is helping its playoff chances. "
-        "Red means it is hurting them."
-    ),
-
-    "division_road_rank": (
-        "Shows how a team's road performance ranks within its division. "
-        "Green means this ranking is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # CORSI AND POSSESSION
-    # --------------------------------------------------------
-
-    "corsi_diff_per_game": (
-        "Shows the average difference between a team's shot attempts "
-        "and its opponents' attempts each game. Green means this "
-        "balance is helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "corsi_net_rel": (
-        "Looks at a team's shot-attempt advantage relative to a "
-        "comparison point. Green means this measure is helping its "
-        "playoff outlook. Red means it is hurting it."
-    ),
-
-    "corsi_x_season": (
-        "Combines shot-attempt performance with how far the season "
-        "has progressed. Green means this combination is helping "
-        "the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "corsi_x_special_teams": (
-        "Looks at how well a team controls play alongside its "
-        "power play and penalty kill performance. Green means this "
-        "combination is helping its playoff chances. Red means it "
-        "is hurting them."
-    ),
-
-    "pdo_x_corsi": (
-        "Combines shooting and save percentage with shot-attempt "
-        "performance. Green means this combination is helping the "
-        "team's playoff outlook. Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # GAMES, GOALS, AND POINTS
-    # --------------------------------------------------------
-
-    "games_remaining": (
-        "Shows how many games a team has left to play. "
-        "Green means its remaining games are contributing positively "
-        "to its playoff prediction. Red means they are contributing negatively."
-    ),
-
-    "gf_pctg": (
-        "Shows the share of total goals in a team's games that "
-        "were scored by that team. Green means this scoring balance "
-        "is helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "goal_diff": (
-        "Shows the difference between goals scored and goals allowed. "
-        "Green means this scoring balance is helping the team's "
-        "playoff chances. Red means it is hurting them."
-    ),
-
-    "goal_diff_pctg": (
-        "Measures a team's goal differential as a percentage. "
-        "Green means this measure is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "losses": (
-        "Counts the team's losses. Green means this record is "
-        "contributing positively to its playoff prediction. "
-        "Red means it is contributing negatively."
-    ),
-
-    "ot_games_pct": (
-        "Shows the percentage of games that reached overtime. "
-        "Green means this pattern is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "ot_losses": (
-        "Counts losses in overtime. These games can still earn "
-        "a team a standings point. Green means this record is "
-        "helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "ot_wins": (
-        "Counts games won in overtime. Green means these results "
-        "are helping the team's playoff outlook. Red means they "
-        "are hurting it."
-    ),
-
-    "overtimes": (
-        "Counts games that went beyond regulation. "
-        "Green means this pattern is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "points_pct": (
-        "Shows the percentage of available standings points "
-        "a team has earned. Green means its points percentage "
-        "is helping its playoff chances. Red means it is hurting them."
-    ),
-
-    "projected_points": (
-        "Estimates how many standings points a team could finish "
-        "the season with. Green means this projection is helping "
-        "its playoff outlook. Red means it is hurting it."
-    ),
-
-    "rotw": (
-        "Counts wins earned in regulation or overtime, excluding "
-        "shootout wins. Green means these wins are helping the "
-        "team's playoff outlook. Red means they are hurting it."
-    ),
-
-    "rotw_pctg": (
-        "Shows the percentage of games won in regulation or overtime. "
-        "Green means this winning rate is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "rw": (
-        "Counts games won before overtime or a shootout. "
-        "Green means these wins are helping the team's playoff "
-        "outlook. Red means they are hurting it."
-    ),
-
-    "so_losses": (
-        "Counts games lost in a shootout. Green means this record "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "so_wins": (
-        "Counts games won in a shootout. Green means these results "
-        "are helping the team's playoff outlook. Red means they "
-        "are hurting it."
-    ),
-
-    "win_pct_before": (
-        "Shows the team's winning percentage at an earlier point "
-        "in the season. Green means that earlier performance is "
-        "helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "wins": (
-        "Counts the team's wins. Green means its win total is "
-        "helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "wins_before": (
-        "Shows how many wins the team had at an earlier point "
-        "in the season. Green means this earlier record is helping "
-        "its playoff outlook. Red means it is hurting it."
-    ),
-
-    "wins_pctg": (
-        "Shows the percentage of games a team has won. "
-        "Green means its winning rate is helping its playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # HOME PERFORMANCE
-    # --------------------------------------------------------
-
-    "home_ga": (
-        "Counts goals allowed in home games. Green means the "
-        "team's home defensive results are helping its playoff "
-        "outlook. Red means they are hurting it."
-    ),
-
-    "home_gf": (
-        "Counts goals scored in home games. Green means home "
-        "scoring is helping the team's playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "home_goal_diff": (
-        "Compares goals scored and allowed at home. "
-        "Green means this balance is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "home_gp": (
-        "Counts games played at home. Green means this measure "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "home_losses": (
-        "Counts games lost at home. Green means the home record "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "home_otlosses": (
-        "Counts home games lost in overtime. Green means these "
-        "results are helping the team's playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "home_points": (
-        "Counts standings points earned at home. Green means "
-        "these points are helping the team's playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "home_rotw": (
-        "Counts home wins earned in regulation or overtime. "
-        "Green means these wins are helping the team's playoff "
-        "outlook. Red means they are hurting it."
-    ),
-
-    "home_rw": (
-        "Counts home wins earned in regulation. Green means "
-        "these wins are helping the team's playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "home_wins": (
-        "Counts games won at home. Green means home wins are "
-        "helping the team's playoff outlook. Red means they are hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # ROAD PERFORMANCE
-    # --------------------------------------------------------
-
-    "road_ga": (
-        "Counts goals allowed in road games. Green means the "
-        "team's road defensive results are helping its playoff "
-        "outlook. Red means they are hurting it."
-    ),
-
-    "road_gf": (
-        "Counts goals scored in road games. Green means road "
-        "scoring is helping the team's playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "road_goal_diff": (
-        "Compares goals scored and allowed on the road. "
-        "Green means this balance is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "road_gp": (
-        "Counts games played on the road. Green means this "
-        "measure is helping the team's playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "road_losses": (
-        "Counts games lost on the road. Green means this record "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "road_ot_losses": (
-        "Counts road games lost in overtime. Green means these "
-        "results are helping the team's playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "road_points": (
-        "Counts standings points earned on the road. Green means "
-        "these points are helping the team's playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "road_rotw": (
-        "Counts road wins earned in regulation or overtime. "
-        "Green means these wins are helping the team's playoff "
-        "outlook. Red means they are hurting it."
-    ),
-
-    "road_rw": (
-        "Counts road wins earned in regulation. Green means "
-        "these wins are helping the team's playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "road_wins": (
-        "Counts games won on the road. Green means road wins "
-        "are helping the team's playoff outlook. Red means they are hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # LEAGUE RANKINGS
-    # --------------------------------------------------------
-
-    "league_home_rank": (
-        "Shows how a team's home performance compares with "
-        "the rest of the league. Green means this ranking is "
-        "helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "league_last_10_rank": (
-        "Ranks teams based on their performance over the last "
-        "10 games. Green means recent results are helping the "
-        "team's playoff outlook. Red means they are hurting it."
-    ),
-
-    "league_rank": (
-        "Shows where a team ranks among all NHL teams. "
-        "Green means its league position is helping its playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "league_road_rank": (
-        "Shows how a team's road performance compares with "
-        "the rest of the league. Green means this ranking is "
-        "helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # PENALTIES AND PENALTY KILL
-    # --------------------------------------------------------
-
-    "penalties_x_season": (
-        "Looks at penalty-related performance alongside how far "
-        "the season has progressed. Green means this combination "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "penalty_risk": (
-        "Measures the team's exposure to penalty-related problems. "
-        "Green means this measure is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "pk_load_x_pk_pct": (
-        "Combines how often a team must kill penalties with how "
-        "successfully it does so. Green means this combination "
-        "is helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "pk_net_gpg": (
-        "Compares goals scored and allowed while shorthanded, "
-        "on a per-game basis. Green means this balance is helping "
-        "the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "pk_net_pct": (
-        "Measures the balance of goals scored and allowed during "
-        "penalty-killing situations. Green means this balance is "
-        "helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "pk_stress_x_season": (
-        "Looks at penalty-killing demands alongside how far the "
-        "season has progressed. Green means this combination is "
-        "helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # POWER PLAY
-    # --------------------------------------------------------
-
-    "pp_ga_pg": (
-        "Shows the average number of goals allowed per game "
-        "during power plays. Green means this measure is helping "
-        "the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "pp_gpg": (
-        "Shows how many power play goals a team scores per game. "
-        "Green means this scoring is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    "pp_net_gpg": (
-        "Compares power play goals scored and allowed per game. "
-        "Green means this balance is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "pp_net_pct": (
-        "Measures the balance between goals scored and allowed "
-        "during power play situations. Green means this balance "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "pp_opp_pg": (
-        "Shows how many power play opportunities a team receives "
-        "per game. Green means these opportunities are helping "
-        "its playoff outlook. Red means they are hurting it."
-    ),
-
-    "ppng_rank": (
-        "Ranks teams by their net power play goal performance. "
-        "Green means this ranking is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "sh_ga_pg": (
-        "Shows how many goals a team allows per game while "
-        "shorthanded. Green means this measure is helping its "
-        "playoff outlook. Red means it is hurting it."
-    ),
-
-    "sh_gf_pg": (
-        "Shows how many goals a team scores per game while "
-        "shorthanded. Green means this scoring is helping its "
-        "playoff outlook. Red means it is hurting it."
-    ),
-
-    "special_teams_net": (
-        "Combines a team's power play and penalty kill results "
-        "into an overall special teams measure. Green means "
-        "special teams are helping its playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "special_teams_x_season": (
-        "Looks at special teams performance alongside how far "
-        "the season has progressed. Green means this combination "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "times_sh_pg": (
-        "Shows how often a team plays shorthanded per game. "
-        "Green means this measure is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # STRENGTH OF SCHEDULE
-    # --------------------------------------------------------
-
-    "sos_future": (
-        "Measures how difficult a team's remaining opponents "
-        "are expected to be. Green means its remaining schedule "
-        "is helping its playoff outlook. Red means it is hurting it."
-    ),
-
-    "sos_past": (
-        "Measures how difficult the team's previous opponents "
-        "have been. Green means this information is helping its "
-        "playoff outlook. Red means it is hurting it."
-    ),
-
-    "pt_pct_x_sos": (
-        "Combines a team's standings points percentage with "
-        "the difficulty of its schedule. Green means this "
-        "combination is helping its playoff outlook. "
-        "Red means it is hurting it."
-    ),
-
-    # --------------------------------------------------------
-    # RUSH AND SCORING CHANCES
-    # --------------------------------------------------------
-
-    "rush_against_per_game": (
-        "Shows how many scoring chances opponents create off "
-        "the rush per game. Green means this measure is helping "
-        "the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "rush_balance_ratio": (
-        "Compares rush chances created with rush chances allowed. "
-        "Green means this balance is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "rush_diff_per_game": (
-        "Shows the average difference between rush chances created "
-        "and allowed per game. Green means this balance is helping "
-        "the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "rush_for_per_game": (
-        "Shows how many scoring chances a team creates off the "
-        "rush per game. Green means these chances are helping "
-        "its playoff outlook. Red means they are hurting it."
-    ),
-
-    "rush_net_x_season": (
-        "Looks at the balance of rush chances alongside how far "
-        "the season has progressed. Green means this combination "
-        "is helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "rush_x_special_teams": (
-        "Combines rush-chance performance with power play and "
-        "penalty kill results. Green means this combination is "
-        "helping the team's playoff outlook. Red means it is hurting it."
-    ),
-
-    "SCA_pg": (
-        "Shows how many scoring chances a team allows per game. "
-        "Green means this defensive measure is helping its "
-        "playoff outlook. Red means it is hurting it."
-    ),
-
-    "sc_net": (
-        "Compares scoring chances created with scoring chances "
-        "allowed. Green means this balance is helping the team's "
-        "playoff outlook. Red means it is hurting it."
-    ),
-
-    "SCF_pg": (
-        "Shows how many scoring chances a team creates per game. "
-        "Green means these chances are helping its playoff outlook. "
-        "Red means they are hurting it."
-    ),
-
-    "shot_attempts_against_per_game": (
-        "Shows how many shot attempts opponents take per game. "
-        "Green means this measure is helping the team's playoff "
-        "outlook. Red means it is hurting it."
-    ),
-
-    "shot_attempts_for_per_game": (
-        "Shows how many shot attempts a team takes per game. "
-        "Green means these attempts are helping its playoff "
-        "outlook. Red means they are hurting it."
-    ),
-
-    "shots_diff_per_game": (
-        "Shows the average difference between shots taken and "
-        "shots allowed each game. Green means this balance is "
-        "helping the team's playoff outlook. Red means it is hurting it."
+        "The percentage of the team's shots on goal that become goals. A higher shooting percentage "
+        "means the team converts more of its shots into goals, generally improving playoff chances."
+        "allows. A positive difference means the team puts more shots on net than its opponents and "
+        "generally improves playoff chances."
     ),
 
     # --------------------------------------------------------
@@ -1510,69 +909,66 @@ FEATURE_DESCRIPTIONS = {
     # --------------------------------------------------------
 
     "urgency": (
-        "Measures how much pressure a team faces in the playoff "
-        "race. Green means this measure is helping its playoff "
-        "outlook. Red means it is hurting it."
+        "Measures the pressure the team faces based on its position in the playoff race. Greater "
+        "urgency can indicate that the team needs points quickly, but does not by itself improve "
+        "playoff chances; the impact depends on the team's standings position."
     ),
 
     "urgency_x_points": (
-        "Combines playoff-race pressure with the team's standings "
-        "points. Green means this combination is helping its "
-        "playoff outlook. Red means it is hurting it."
+        "Combines the team's playoff-race urgency with its standings points. It helps the model "
+        "assess how much the team's point total matters under its current playoff pressure, rather "
+        "than treating urgency alone as a positive or negative sign."
     ),
 
     "wc2_points": (
-        "Shows the standings points held by the team occupying "
-        "the second wild card spot. Green means this playoff "
-        "cutoff is helping the team's outlook. Red means it is hurting it."
+        "The number of standings points held by the team in the second wild-card playoff position. A "
+        "higher cutoff means teams chasing that spot generally need more points, which can make "
+        "qualifying harder."
     ),
 
     "wc2_points_pct": (
-        "Shows the points percentage of the team occupying the "
-        "second wild card spot. Green means this playoff cutoff "
-        "is helping the team's outlook. Red means it is hurting it."
+        "The points percentage of the team holding the second wild-card playoff position. A higher "
+        "cutoff percentage indicates a stronger pace is needed to qualify and can make the playoff "
+        "race more difficult."
     ),
 
     "wc_points_margin": (
-        "Shows how many standings points separate a team from "
-        "the wild card cutoff. Green means this gap is helping "
-        "its playoff outlook. Red means it is hurting it."
+        "The difference in standings points between the team and the wild-card cutoff. A more "
+        "positive margin means the team is farther above the cutoff, generally improving playoff "
+        "chances; a negative margin means it is chasing a playoff spot."
     ),
 
     "wc_points_pct_margin": (
-        "Compares a team's points percentage with the wild card "
-        "cutoff. Green means this gap is helping its playoff "
-        "outlook. Red means it is hurting it."
+        "The difference between the team's points percentage and the wild-card cutoff points "
+        "percentage. A more positive margin generally improves playoff chances and helps compare "
+        "teams that have played different numbers of games."
     ),
 
     "wc_pressure_x_performance": (
-        "Combines the pressure of the wild card race with how "
-        "well the team is performing. Green means this combination "
-        "is helping its playoff outlook. Red means it is hurting it."
+        "Combines the pressure of the wild-card race with the team's current performance. Strong "
+        "performance under greater playoff pressure generally supports playoff chances, while falling "
+        "behind in a tight race hurts them."
     ),
 
     "wc_teams_within_2pts": (
-        "Counts teams within two standings points of the wild "
-        "card cutoff. Green means this measure is helping the "
-        "team's playoff outlook. Red means it is hurting it."
+        "The number of teams within two standings points of the wild-card cutoff. More teams close to "
+        "the cutoff generally indicate a tighter playoff race and more competition for the available "
+        "spots."
     ),
 
     "wc_teams_within_4pts": (
-        "Counts teams within four standings points of the wild "
-        "card cutoff. Green means this measure is helping the "
-        "team's playoff outlook. Red means it is hurting it."
+        "The number of teams within four standings points of the wild-card cutoff. More teams in this "
+        "range generally indicate greater competition for wild-card positions."
     ),
 
     "wc_teams_within_6pts": (
-        "Counts teams within six standings points of the wild "
-        "card cutoff. Green means this measure is helping the "
-        "team's playoff outlook. Red means it is hurting it."
+        "The number of teams within six standings points of the wild-card cutoff. More teams in this "
+        "range suggest a crowded playoff race, although not every team is equally likely to qualify."
     ),
 
     "wildcard_rank": (
-        "Shows where a team stands in the wild card race. "
-        "Green means its position is helping its playoff outlook. "
-        "Red means it is hurting it."
+        "The team's current ranking in the wild-card race. A better ranking generally improves "
+        "playoff chances because the team is closer to securing one of the available playoff spots."
     ),
 }
 
