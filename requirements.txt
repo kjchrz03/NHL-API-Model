@@ -6,3 +6,4 @@ altair
 squarify
 plotly
 streamlit-echarts
+matplotlib
