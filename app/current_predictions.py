@@ -57,11 +57,38 @@ def safe_request(url, params=None, max_retries=5):
 # ============================================================
 # DATABASE CONFIGURATION
 # ============================================================
-DB_PATH = (
-    r"C:\Users\kjchr\Desktop\hockey\new_hockey_env"
-    r"\API data\data\duckdb\nhl_data.duckdb"
-)
+from pathlib import Path
+import duckdb
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+LOCAL_DB_PATH = PROJECT_ROOT / "data" / "duckdb" / "nhl_data.duckdb"
+DEPLOYMENT_DIR = PROJECT_ROOT / "data" / "deployment"
+
+
+def get_connection():
+    if LOCAL_DB_PATH.exists():
+        return duckdb.connect(str(LOCAL_DB_PATH), read_only=True)
+
+    # Streamlit Cloud: use an in-memory DuckDB database
+    # backed by the deployed Parquet files.
+    con = duckdb.connect(":memory:")
+
+    if not DEPLOYMENT_DIR.is_dir():
+        raise FileNotFoundError(
+            f"Deployment data directory not found: {DEPLOYMENT_DIR}"
+        )
+
+    for parquet_file in DEPLOYMENT_DIR.glob("*.parquet"):
+        table_name = parquet_file.stem
+        escaped_path = parquet_file.as_posix().replace("'", "''")
+
+        con.execute(f'''
+            CREATE VIEW "{table_name}" AS
+            SELECT * FROM read_parquet('{escaped_path}')
+        ''')
+
+    return con
 pd.options.mode.chained_assignment = None
 
 pd.set_option("display.max_colwidth", None)
@@ -85,7 +112,7 @@ def fetch_current_predictions(season_id, model_version="v6"):
             model_version
         )
 
-        con = duckdb.connect(DB_PATH, read_only=True)
+        con = get_connection()
 
         # ====================================================
         # 1. FETCH GAME SUMMARY
@@ -340,7 +367,7 @@ def fetch_current_predictions(season_id, model_version="v6"):
 
 def fetch_shap_values(season_id, model_version="v6"):
 
-    con = duckdb.connect(DB_PATH, read_only=True)
+    con = get_connection()
 
     try:
         shap_df = con.execute("""
@@ -360,7 +387,7 @@ def fetch_shap_context(season_id, model_version="v6"):
     if model_version != "v6":
         raise ValueError("Postgame SHAP context currently supports v6 only")
 
-    con = duckdb.connect(DB_PATH, read_only=True)
+    con = get_connection()
     try:
         return con.execute("""
             SELECT *
@@ -400,7 +427,7 @@ def fetch_shap_summary(season_id, model_version="v6"):
             model_version
         )
 
-        con = duckdb.connect(DB_PATH, read_only=True)
+        con = get_connection()
 
         shap_summary_df = con.execute(f"""
             SELECT
