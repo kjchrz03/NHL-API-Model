@@ -944,6 +944,7 @@ with tab_txgiving:
                             labelOverlap=False,
                             labelLimit=100,
                             labelPadding=8,
+                            labelFontSize=10,
                             labelExpr="""
                                 indexof(
                                     [
@@ -987,16 +988,16 @@ with tab_txgiving:
                             title="Displayed Probability",
                             format=".1%"
                         ),
-                        alt.Tooltip(
-                            "playoff_prob_xgb:Q",
-                            title="XGP Model",
-                            format=".1%"
-                        ),
-                        alt.Tooltip(
-                            "playoff_prob_rf:Q",
-                            title="RF Model",
-                            format=".1%"
-                        ),
+                        # alt.Tooltip(
+                        #     "playoff_prob_xgb:Q",
+                        #     title="XGP Model",
+                        #     format=".1%"
+                        # ),
+                        # alt.Tooltip(
+                        #     "playoff_prob_rf:Q",
+                        #     title="RF Model",
+                        #     format=".1%"
+                        # ),
                         alt.Tooltip(
                             "playoff_tier:N",
                             title="Playoff Prediction"
@@ -1241,7 +1242,7 @@ with tab_txgiving:
                                 lambda label: "\n".join(
                                     textwrap.wrap(
                                         str(label),
-                                        width=15,
+                                        width=10,
                                         break_long_words=False
                                     )
                                 )
@@ -1283,8 +1284,8 @@ with tab_txgiving:
 
                         # Use the smaller rectangle dimension
                         mosaic_df["box_size"] = (
-                            mosaic_df[["dx", "dy"]].min(axis=1)
-                        )
+                            mosaic_df["dx"] * mosaic_df["dy"]
+                        ) ** 0.5
 
                         min_size = mosaic_df["box_size"].min()
                         max_size = mosaic_df["box_size"].max()
@@ -1373,7 +1374,6 @@ with tab_txgiving:
                             + mosaic_df["impact_height"]
                             + mosaic_df["detail_height"] * 2
                             + GAP_FEATURE
-                            + (mosaic_df["feature_lines"] - 1) * 12
                             + GAP_IMPACT
                             + GAP_DETAIL
                         )
@@ -1400,7 +1400,7 @@ with tab_txgiving:
                         # --------------------------------------------
 
                         mosaic_df["feature_line_height"] = (
-                            mosaic_df["feature_font_size"] * 1.2
+                        mosaic_df["feature_font_size"] * 1.2
                         )
 
                         mosaic_df["impact_line_height"] = (
