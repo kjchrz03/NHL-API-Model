@@ -2764,7 +2764,7 @@ with tab_teams:
                                     ),
                                     alt.Tooltip(
                                         "impact:N",
-                                        title="Direction"
+                                        title="Direction of Impact"
                                     ),
                                     alt.Tooltip(
                                         "game_date:T",
@@ -2778,7 +2778,7 @@ with tab_teams:
                                     ),
                                     alt.Tooltip(
                                         "avg_shap:Q",
-                                        title="Average SHAP",
+                                        title="Average Impact on Playoff Prediction",
                                         format="+.4f"
                                     ),
                                     alt.Tooltip(
