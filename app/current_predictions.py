@@ -8,13 +8,20 @@ import random
 import duckdb
 import html
 import logging
-from explainability.feature_metadata import (
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from prediction_model.explainability.feature_metadata import (
     FEATURE_LABELS,
     FEATURE_DESCRIPTIONS,
     get_feature_label,
     get_feature_description,
 )
-
 logger = logging.getLogger(__name__)
 
 
@@ -349,7 +356,21 @@ def fetch_shap_values(season_id, model_version="v6"):
     finally:
         con.close()
 
+def fetch_shap_context(season_id, model_version="v6"):
+    if model_version != "v6":
+        raise ValueError("Postgame SHAP context currently supports v6 only")
 
+    con = duckdb.connect(DB_PATH, read_only=True)
+    try:
+        return con.execute("""
+            SELECT *
+            FROM playoff_shap_context_v6
+            WHERE season_id = ?
+              AND model_version = ?
+            ORDER BY snapshot_date, team_id
+        """, [season_id, model_version]).df()
+    finally:
+        con.close()
 # ============================================================
 # FETCH SHAP SUMMARY
 # ============================================================

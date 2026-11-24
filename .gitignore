@@ -48,9 +48,10 @@ Thumbs.db
 # Ignore large CSVs by default
 *.csv
 
-# Allow specific CSVs (optional)
-#!reference_data/*.csv
 
+# Allow Streamlit deployment Parquet files
+!data/deployment/
+!data/deployment/*.parquet
 # =====================================================
 # Models / Artifacts
 # =====================================================

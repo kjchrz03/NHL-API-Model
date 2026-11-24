@@ -487,6 +487,15 @@ DATA_SCHEMA = {
     "ot_wins": "BIGINT",
     "overtimes": "BIGINT",
     "ot_games_pct": "DOUBLE",
+    # Postgame context only; not replacements for model input features.
+    "game_venue": "VARCHAR",
+    "postgame_home_gp": "BIGINT",
+    "postgame_road_gp": "BIGINT",
+    "postgame_home_points": "BIGINT",
+    "postgame_road_points": "BIGINT",
+    "postgame_home_goal_diff": "BIGINT",
+    "postgame_road_goal_diff": "BIGINT",
+
     "pt_pct_x_sos": "DOUBLE",
     "gaa_x_sv": "DOUBLE",
     "gd_x_rushdiff": "BIGINT",
@@ -2214,6 +2223,88 @@ def build_core_df(
 # Build Final DF (join standings correctly)
 # ============================================================
 
+def add_postgame_context(
+    final_df: pd.DataFrame,
+    game_summary: pd.DataFrame,
+    overtime_games: pd.DataFrame,
+    offsets: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build game-accurate venue and postgame home/road context.
+
+    These are explanation-only fields; existing pregame standings stay unchanged.
+    The caller must rebuild from the season start to establish full cumulative
+    history; otherwise, prior postgame counters are used as offsets.
+    """
+    out = final_df.copy()
+    keys = ["season_id", "game_id", "team_id"]
+    required = {"season_id", "game_id", "home_team", "away_team"}
+    if not required.issubset(game_summary.columns):
+        raise KeyError(f"Game summary missing venue columns: {sorted(required - set(game_summary.columns))}")
+    venues = game_summary[["season_id", "game_id", "home_team", "away_team"]].drop_duplicates(["season_id", "game_id"])
+    out = out.merge(venues, on=["season_id", "game_id"], how="left", validate="many_to_one")
+    home = out["team_id"].eq(out["home_team"])
+    road = out["team_id"].eq(out["away_team"])
+    if (~(home | road)).any() or (home & road).any():
+        raise ValueError("Cannot establish a unique home/road team for every game")
+    out["game_venue"] = np.where(home, "home", "road")
+    out = out.drop(columns=["home_team", "away_team"])
+    out = out.sort_values(["season_id", "team_id", "game_date", "game_id"]).copy()
+    grp = out.groupby(["season_id", "team_id"], sort=False)
+    # Use the game-specific scoring data, never delayed standings snapshots.
+    for col in ["goals_for", "goals_against", "game_win"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    if out[["goals_for", "goals_against", "game_win"]].isna().any().any():
+        raise ValueError("Cannot compute postgame context: missing game scoring/outcome data")
+    goal_diff = out["goals_for"] - out["goals_against"]
+    # Classify each completed game using its play-by-play period types.
+    # Never assume missing play-by-play means a regulation game.
+    ot_keys = ["season_id", "game_id"]
+    if overtime_games.duplicated(ot_keys).any():
+        raise ValueError("Duplicate overtime classifications for the same game")
+    out = out.merge(overtime_games[ot_keys + ["reached_ot"]],
+                    on=ot_keys, how="left", validate="many_to_one")
+    if out["reached_ot"].isna().any():
+        missing = out.loc[out["reached_ot"].isna(), "game_id"].unique().tolist()
+        raise ValueError(f"Missing play-by-play OT classification for games: {missing}")
+    if not out["game_win"].isin([0, 1]).all():
+        raise ValueError("Game wins must be exactly 0 or 1")
+    out["game_points"] = (
+        2 * out["game_win"].astype(int)
+        + ((out["game_win"].eq(0)) & (out["reached_ot"].eq(1))).astype(int)
+    )
+    game_checks = out.groupby(ot_keys).agg(
+        team_rows=("team_id", "size"),
+        winners=("game_win", "sum"),
+        total_points=("game_points", "sum"),
+        reached_ot=("reached_ot", "first"),
+    )
+    bad = game_checks.loc[
+        (game_checks["team_rows"] != 2)
+        | (game_checks["winners"] != 1)
+        | (game_checks["total_points"] != 2 + game_checks["reached_ot"])
+    ]
+    if not bad.empty:
+        raise ValueError("Invalid game points distribution:\n" + bad.to_string())
+    points = out["game_points"]
+    print(f"✅ Postgame points verified: {len(game_checks)} games "
+          f"({int(game_checks['reached_ot'].sum())} OT/SO)")
+    out = out.drop(columns=["reached_ot", "game_points"])
+    for side in ("home", "road"):
+        # Recompute masks after sorting/merging, using the persisted venue.
+        mask = out["game_venue"].eq(side)
+        out[f"postgame_{side}_gp"] = mask.astype(int)
+        out[f"postgame_{side}_goal_diff"] = goal_diff.where(mask, 0)
+        out[f"postgame_{side}_points"] = points.where(mask, 0)
+        for metric in ["gp", "goal_diff", "points"]:
+            col = f"postgame_{side}_{metric}"
+            out[col] = out.groupby(["season_id", "team_id"], sort=False)[col].cumsum()
+            offcol = f"{col}_offset"
+            if offsets is not None and not offsets.empty and offcol in offsets.columns:
+                offset_map = offsets.drop_duplicates("team_id").set_index("team_id")[offcol]
+                out[col] = out[col] + pd.to_numeric(out["team_id"].map(offset_map), errors="coerce").fillna(0)
+    return out.sort_values(["season_id", "game_date", "game_id", "team_id"]).reset_index(drop=True)
+
+
 def build_final_df(
     core_df: pd.DataFrame,
     standings: pd.DataFrame,
@@ -2755,7 +2846,7 @@ def special_features(final_updates: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 # Prediction Data Runner Main Entry Point
 # ============================================================
-def run_prediction_data(*, con: duckdb.DuckDBPyConnection, season_id: int, ) -> None:
+def run_prediction_data(*, con: duckdb.DuckDBPyConnection, season_id: int, force_rebuild: bool = False) -> None:
     
     print("\n==============================")
     print(f"▶ Running prediction for season {season_id}")
@@ -2794,7 +2885,8 @@ def run_prediction_data(*, con: duckdb.DuckDBPyConnection, season_id: int, ) -> 
     complete_ids = set(existing.loc[
         (existing["team_rows"] == 2) & (existing["total_rows"] == 2), "game_id"
     ].astype(int))
-    missing = game_summary.loc[~game_summary["game_id"].astype(int).isin(complete_ids)]
+    missing = (game_summary.copy() if force_rebuild else
+               game_summary.loc[~game_summary["game_id"].astype(int).isin(complete_ids)])
 
     if missing.empty:
         print("✅ No missing or incomplete games detected.")
@@ -2848,6 +2940,22 @@ def run_prediction_data(*, con: duckdb.DuckDBPyConnection, season_id: int, ) -> 
     missing_offsets = set(prior_teams["team_id"]) - set(offsets["team_id"])
     if missing_offsets:
         raise RuntimeError(f"Missing cumulative offsets for teams: {sorted(missing_offsets)}")
+
+    # Postgame cumulative context requires historical offsets when incremental.
+    # An existing pre-upgrade table cannot supply them: require a full rebuild.
+    context_offset_cols = [
+        "postgame_home_gp_offset", "postgame_road_gp_offset",
+        "postgame_home_goal_diff_offset", "postgame_road_goal_diff_offset",
+        "postgame_home_points_offset", "postgame_road_points_offset",
+    ]
+    if not force_rebuild and not prior_teams.empty:
+        missing_context_offsets = [c for c in context_offset_cols if c not in offsets.columns]
+        if missing_context_offsets:
+            raise RuntimeError(
+                "Historical postgame context has not been initialized. "
+                "Run run_prediction_data(con=con, season_id=season_id, force_rebuild=True) "
+                "once before incremental updates."
+            )
 
     # ------------------------------------------------------------
     # 5. Build canonical games-played spine
@@ -3050,6 +3158,20 @@ def run_prediction_data(*, con: duckdb.DuckDBPyConnection, season_id: int, ) -> 
         standings=tables["daily_standings"],
     )
     print(f"Final rows after standings: {len(final_df)}")
+    # One row per completed game. Period type OT/SO establishes the
+    # standings point awarded to the losing team.
+    overtime_games = con.execute("""
+        SELECT season_id, game_id,
+               MAX(CASE WHEN UPPER(TRIM(period_type)) IN ('OT', 'SO')
+                        THEN 1 ELSE 0 END) AS reached_ot
+        FROM all_play_by_play
+        WHERE season_id = ?
+        GROUP BY season_id, game_id
+    """, [season_id]).df()
+    final_df = add_postgame_context(
+        final_df, game_summary, overtime_games=overtime_games, offsets=offsets
+    )
+
 
     print("\nFINAL PREGAME STATE CHECK:")
     print(
@@ -3297,6 +3419,15 @@ def run_prediction_data(*, con: duckdb.DuckDBPyConnection, season_id: int, ) -> 
     # ------------------------------------------------------------
     # Verify table schema matches DATA_SCHEMA
     # ------------------------------------------------------------
+    for new_col in [
+        "game_venue", "postgame_home_gp", "postgame_road_gp",
+        "postgame_home_points", "postgame_road_points",
+        "postgame_home_goal_diff", "postgame_road_goal_diff",
+    ]:
+        existing_cols = {r[1] for r in con.execute("PRAGMA table_info('team_daily_stats')").fetchall()}
+        if new_col not in existing_cols:
+            con.execute(f'ALTER TABLE team_daily_stats ADD COLUMN "{new_col}" {DATA_SCHEMA[new_col]}')
+
     daily_stats_cols = [
         row[1]
         for row in con.execute(

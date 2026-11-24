@@ -29,7 +29,7 @@ from .feature_metadata import (
     RANK_CONTEXT,
     get_feature_label,
 )
-EXPLANATION_VERSION = "game-explanations-v6-balanced-context-v4"
+EXPLANATION_VERSION = "game-explanations-v6-balanced-context-v5"
 DESTINATION = "game_shap_explanations_v6_balanced"
 TOP_N = 5
 KEYS = ["season_id", "snapshot_date", "team_id", "model_version"]
@@ -245,6 +245,11 @@ def _load(con, season_id, version):
             "team_daily_stats contains duplicate season/team/game dates"
         )
 
+    # Derive per-game contributions from the complete chronological history,
+    # BEFORE restricting to the snapshots represented in SHAP rankings.
+    # Only compare consecutive games, never consecutive SHAP snapshots.
+    daily = _add_historical_game_deltas(daily)
+
     # ====================================================
     # 5. RECONSTRUCT ENGINEERED MODEL FEATURES
     # ====================================================
@@ -253,7 +258,7 @@ def _load(con, season_id, version):
     # relative league statistics depend on other teams on the same date.
     # build_features only uses rows within each season/game_date for
     # cross-team calculations, so future dates do not enter a snapshot.
-    engineered = build_features(daily.copy())
+    engineered = build_features(daily.drop(columns=[c for c in daily.columns if c.startswith("game_delta__") or c == "derived_venue"]).copy())
 
     if len(engineered) != len(daily):
         raise ValueError("build_features changed the number of team snapshots")
@@ -330,6 +335,50 @@ def _load(con, season_id, version):
         print(f"Warning: unavailable model feature values (kept NULL): {counts}")
 
     return ranked
+
+
+
+def _add_historical_game_deltas(daily):
+    """Create observed game deltas; refuse to infer across missing games.
+
+    The first game may be compared with a zero baseline. Later games require
+    consecutive games_played values. Unverifiable deltas remain NaN.
+    """
+    out = daily.sort_values(["season_id", "team_id", "game_date", "game_id"],
+                            kind="stable").copy()
+    keys = ["season_id", "team_id"]
+    played = pd.to_numeric(out["games_played"], errors="coerce")
+    previous_played = played.groupby([out[k] for k in keys]).shift(1)
+    first = previous_played.isna() & played.eq(1)
+    consecutive = played.sub(previous_played).eq(1)
+    valid = first | consecutive
+
+    counters = [
+        "home_gp", "road_gp", "home_wins", "home_losses", "home_otlosses",
+        "home_rotw", "home_rw", "home_points", "home_gf", "home_ga",
+        "home_goal_diff", "road_wins", "road_losses", "road_ot_losses",
+        "road_rotw", "road_rw", "road_points", "road_gf", "road_ga",
+        "road_goal_diff", "overtimes", "ot_wins", "ot_losses",
+        "so_wins", "so_losses", "points", "c_ld_goals", "c_HDCF",
+    ]
+    for col in counters:
+        if col not in out:
+            continue
+        current = pd.to_numeric(out[col], errors="coerce")
+        previous = current.groupby([out[k] for k in keys]).shift(1)
+        previous = previous.mask(first, 0)
+        delta = current.sub(previous).where(valid)
+        # Cumulative counters must not decrease, except signed differentials.
+        if col not in {"home_goal_diff", "road_goal_diff"}:
+            delta = delta.where(delta.ge(0))
+        out[f"game_delta__{col}"] = delta
+
+    home = out.get("game_delta__home_gp", pd.Series(np.nan, index=out.index))
+    road = out.get("game_delta__road_gp", pd.Series(np.nan, index=out.index))
+    out["derived_venue"] = pd.Series(None, index=out.index, dtype="object")
+    out.loc[home.eq(1) & road.eq(0), "derived_venue"] = "home"
+    out.loc[road.eq(1) & home.eq(0), "derived_venue"] = "road"
+    return out.sort_index()
 
 
 def _numeric(df, col):
@@ -417,13 +466,20 @@ def _context(row):
         "went_to_so", "ot", "shootout", "game_points_earned",
         "goals_for", "goals_against", "game_goal_diff",
         "game_gf_pct", "game_points_pct", "game_sc_net",
-        "SCF", "SCA", "game_HDCF", "HDCF", "HDCA",
+        "SCF", "SCA", "game_HDCF", "HDCF", "HDCA", "ld_goals",
+        "derived_venue", "games_played", "overtimes", "ot_wins",
+        "so_wins", "so_losses", "ot_losses", "home_gp", "road_gp",
     }
+    context_columns.update(c for c in row.index if c.startswith("game_delta__"))
     for col in context_columns:
         v = value(col)
         if pd.notna(v):
             stats[col] = _json_safe(v)
     game_contribution = value(contrib) if contrib else np.nan
+    if feature in {"c_ld_goals", "c_HDCF"}:
+        direct = value("ld_goals" if feature == "c_ld_goals" else "HDCF")
+        if pd.notna(direct):
+            game_contribution = direct
     game_vs_cumulative = value(rate) - row["feature_value"] if rate and pd.notna(value(rate)) else np.nan
     game_vs_average = value(avg) - row["feature_value"] if avg and pd.notna(value(avg)) else np.nan
     return pd.Series({"game_contribution": game_contribution,
@@ -549,6 +605,9 @@ def generate_game_explanation(row):
         return snapshot_value(name)
 
     def venue():
+        derived = observed("derived_venue")
+        if isinstance(derived, str) and derived in {"home", "road"}:
+            return derived
         for name in ("home_road", "home_away"):
             v = observed(name)
             if pd.notna(v):
@@ -590,7 +649,9 @@ def generate_game_explanation(row):
             if pd.notna(gf) and pd.notna(ga):
                 game_context = f"The team scored {gf:.0f} goals and allowed {ga:.0f} in the selected game."
         elif feature == "ot_games_pct":
-            ot = observed("went_to_ot")
+            ot = observed("game_delta__overtimes")
+            if pd.isna(ot):
+                ot = observed("went_to_ot")
             if pd.isna(ot):
                 ot = observed("game_ot")
             if pd.notna(ot) and str(ot).strip().lower() in {"0", "1", "true", "false"}:
@@ -617,20 +678,21 @@ def generate_game_explanation(row):
                 f"tracks the team's {relevant_venue} results."
             )
         elif selected_venue == relevant_venue:
-            gf, ga = observed("goals_for"), observed("goals_against")
-            outcome = result_description()
-            if feature.endswith("goal_diff") and pd.notna(gf) and pd.notna(ga):
-                game_context = f"In this {relevant_venue} game, the goal differential was {gf - ga:+.0f}."
-            elif feature.endswith(("_gf", "_ga")):
-                number = gf if feature.endswith("_gf") else ga
-                if pd.notna(number):
-                    game_context = f"The team {'scored' if feature.endswith('_gf') else 'allowed'} {number:.0f} goals in this {relevant_venue} game."
-            elif feature.endswith(("wins", "losses")) and outcome:
-                game_context = f"The team {outcome} this {relevant_venue} game."
-            elif feature.endswith("points"):
-                earned = observed("game_points_earned")
-                if pd.notna(earned):
-                    game_context = f"The team earned {earned:.0f} standings points in this {relevant_venue} game."
+            delta = observed(f"game_delta__{feature}")
+            if pd.notna(delta):
+                if feature.endswith("goal_diff"):
+                    game_context = f"This {relevant_venue} game changed the team's {relevant_venue} goal differential by {delta:+.0f}."
+                elif feature.endswith("points"):
+                    game_context = f"The team earned {delta:.0f} standings points in this {relevant_venue} game."
+                elif feature.endswith("_gf"):
+                    game_context = f"The team scored {delta:.0f} goals in this {relevant_venue} game."
+                elif feature.endswith("_ga"):
+                    game_context = f"The team allowed {delta:.0f} goals in this {relevant_venue} game."
+                elif feature.endswith(("wins", "losses", "otlosses", "_rw")):
+                    game_context = (
+                        f"This {relevant_venue} game added {delta:.0f} "
+                        f"to the team's {label} total."
+                    )
 
     elif feature in {"sos_future", "sos_past"}:
         qualifier = "remaining" if feature == "sos_future" else "completed"
@@ -654,7 +716,12 @@ def generate_game_explanation(row):
             f"The team's season-to-date {label} is "
             f"{format_number(feature_value, 0)}."
         )
-        # A win/loss alone does not establish whether the game was a SO/OT result.
+        delta = observed(f"game_delta__{feature}")
+        if pd.notna(delta):
+            game_context = (
+                f"The selected game added {delta:.0f} to the team's "
+                f"{label} total."
+            )
 
     elif feature == "sc_net":
         season_context = (
@@ -735,6 +802,12 @@ def generate_game_explanation(row):
     # ====================================================
 
     elif feature.startswith("c_"):
+
+        if feature in {"c_ld_goals", "c_HDCF"}:
+            source = "ld_goals" if feature == "c_ld_goals" else "HDCF"
+            actual = observed(source)
+            if pd.notna(actual):
+                game_contribution = actual
 
         # --------------------------------------------
         # Season context

@@ -1,7 +1,7 @@
 # Import the external library
 # Import the function from season_data.py
 from current_standings import fetch_current_standings
-from current_predictions import fetch_current_predictions, fetch_shap_values, fetch_shap_summary, calculate_shap_consistency, get_feature_label, get_feature_description
+from current_predictions import fetch_current_predictions, fetch_shap_values, fetch_shap_summary, calculate_shap_consistency, get_feature_label, get_feature_description, fetch_shap_context
 import streamlit as st
 import streamlit.components.v1 as components
 from streamlit_echarts import st_echarts
@@ -1825,9 +1825,17 @@ with tab_teams:
                     season_id=season_id,
                     model_version=model_version
                 )
-
+    @st.cache_data(ttl="6h")
+    def load_shap_context(season_id, model_version="v6"):
+        return fetch_shap_context(
+            season_id=season_id,
+            model_version=model_version
+        )
     
-        
+    shap_context = load_shap_context(
+        season_id=20262027,
+        model_version="v6"
+        )
     full_df = load_full_data(
         season_id=20262027,
         model_version="v6"
@@ -1943,20 +1951,8 @@ with tab_teams:
         index=available_labels.index("BOS") if "BOS" in available_labels else 0,
     )
 
-        # ---------------------------------------------------
-        # Logic for handling "All Teams"
-        # ---------------------------------------------------
-        
-        # If "All Teams" is selected → ignore everything else
-        if "All Teams" in selected_labels:
-            selected_teams = TRI_CODES[:]   # all teams
-        else:
-            selected_teams = selected_labels[:]  # individual selections
-
-        # If user clears everything, revert to All Teams
-        if not selected_teams:
-            selected_teams = TRI_CODES[:]
-            st.info("No team selected — showing ALL teams.", icon=":material/info:")
+        # A selectbox returns one team code as a string.
+        selected_teams = selected_labels
 
 
     # =========================================================
@@ -1985,7 +1981,8 @@ with tab_teams:
 
         season_mode = st.pills(
             "View",
-            options=["Current Season", "All Seasons", "Custom Selection"],
+            # options=["Current Season", "All Seasons", "Custom Selection"],
+            options=["Current Season"],
             default="Current Season",
         )
         
@@ -2168,6 +2165,53 @@ with tab_teams:
                     # ====================================================
 
                     st.subheader(f"{team} — Most Consistent Playoff Drivers")
+
+                    # ====================================================
+                    # POSTGAME HOME / ROAD CONTEXT (EXPLANATORY ONLY)
+                    # ====================================================
+                    # Show cumulative results as of the latest SHAP snapshot
+                    # in the selected range. These fields do not change SHAP.
+                    if shap_context is not None and not shap_context.empty:
+                        team_context = shap_context.loc[
+                            (shap_context["tri_code"] == team)
+                            & (
+                                pd.to_datetime(
+                                    shap_context["snapshot_date"],
+                                    errors="coerce"
+                                ) <= pd.Timestamp(latest_date)
+                            )
+                        ].copy()
+
+                        if not team_context.empty:
+                            team_context["snapshot_date"] = pd.to_datetime(
+                                team_context["snapshot_date"]
+                            )
+                            context = team_context.sort_values(
+                                "snapshot_date"
+                            ).iloc[-1]
+
+                            context_fields = [
+                                "postgame_home_gp", "postgame_road_gp",
+                                "postgame_home_points", "postgame_road_points",
+                                "postgame_home_goal_diff", "postgame_road_goal_diff"
+                            ]
+                            if context[context_fields].notna().all():
+                                home_gp = int(context["postgame_home_gp"])
+                                road_gp = int(context["postgame_road_gp"])
+                                home_pts = int(context["postgame_home_points"])
+                                road_pts = int(context["postgame_road_points"])
+                                home_gd = int(context["postgame_home_goal_diff"])
+                                road_gd = int(context["postgame_road_goal_diff"])
+
+                                st.caption(
+                                    f"Completed-game results through "
+                                    f"{context['snapshot_date']:%B %d, %Y} — "
+                                    f"Home: {home_pts} points in {home_gp} games "
+                                    f"(goal differential {home_gd:+d}) · "
+                                    f"Road: {road_pts} points in {road_gp} games "
+                                    f"(goal differential {road_gd:+d}). "
+                                    "These are descriptive statistics, not SHAP contributions."
+                                )
 
                     st.caption(
                         f"Through {latest_date:%B %d, %Y} — "
@@ -2522,6 +2566,60 @@ with tab_teams:
                             st.markdown(
                                 get_feature_description(selected_feature)
                             )
+                            
+                                                        # ====================================================
+                            # HOME / ROAD PERFORMANCE CONTEXT
+                            # ====================================================
+
+                            context_feature_map = {
+                                "home_points": ("postgame_home_points", "points", "Home"),
+                                "road_points": ("postgame_road_points", "points", "Road"),
+                                "home_goal_diff": ("postgame_home_goal_diff", "goal differential", "Home"),
+                                "road_goal_diff": ("postgame_road_goal_diff", "goal differential", "Road"),
+                                "home_gp": ("postgame_home_gp", "games played", "Home"),
+                                "road_gp": ("postgame_road_gp", "games played", "Road"),
+                            }
+
+                            if selected_feature in context_feature_map:
+
+                                context_column, unit, venue = context_feature_map[selected_feature]
+
+                                feature_context = shap_context[
+                                    shap_context["tri_code"] == selected_teams
+                                ].copy()
+
+                                feature_context["snapshot_date"] = pd.to_datetime(
+                                    feature_context["snapshot_date"]
+                                )
+
+                                if not plot_df.empty:
+
+                                    displayed_snapshot = plot_df["snapshot_date"].max()
+
+                                    feature_context = feature_context[
+                                        feature_context["snapshot_date"] == displayed_snapshot
+                                    ]
+
+                                    if not feature_context.empty:
+
+                                        context_row = feature_context.iloc[-1]
+                                        actual_value = context_row[context_column]
+
+                                        if pd.notna(actual_value):
+
+                                            formatted_value = (
+                                                f"{int(actual_value):+d}"
+                                                if "goal_diff" in selected_feature
+                                                else f"{int(actual_value)}"
+                                            )
+
+                                            st.caption(
+                                                f"Actual {venue.lower()} performance through "
+                                                f"{displayed_snapshot:%B %d, %Y}: "
+                                                f"{formatted_value} {unit}. "
+                                                "This is postgame context, not the "
+                                                "pregame value used by the model."
+                                            )
 
                             # ------------------------------------------------
                             # DISPLAY CHART
@@ -2918,11 +3016,17 @@ with tab_teams:
     # =========================================================
     # BEST + WORST PLAYOFF PROBABILITY -- FIX THIS 
     # =========================================================
-    if not pred.empty:
 
-        # Highest and lowest probabilities recorded to date
-        best_row = pred.loc[pred["playoff_prob"].idxmax()]
-        worst_row = pred.loc[pred["playoff_prob"].idxmin()]
+
+    team_pred = pred[
+        pred["tri_code"] == selected_teams
+    ].copy()
+
+    if not team_pred.empty:
+
+        # Highest and lowest probabilities for selected team
+        best_row = team_pred.loc[team_pred["playoff_prob"].idxmax()]
+        worst_row = team_pred.loc[team_pred["playoff_prob"].idxmin()]
 
         best_prob = best_row["playoff_prob"]
         worst_prob = worst_row["playoff_prob"]
@@ -3004,8 +3108,7 @@ with tab_teams:
                         margin-bottom: 0;
                     ">
                     <b>{best_date:%b %d}</b>
-                    <br>
-                    <b>{best_against}</b>
+
                     </p>
                     """,
                     unsafe_allow_html=True
@@ -3034,9 +3137,7 @@ with tab_teams:
                         margin-top: -20px;
                         margin-bottom: 0;
                     ">
-                    <b>{worst_date:%b %d}</b>
-                    <br>
-                    <b>{worst_against}</b>                  
+                    <b>{worst_date:%b %d}</b>           
                     </p>
                     """,
                     unsafe_allow_html=True
@@ -3204,6 +3305,8 @@ with tab_teams:
         # )
         # st.altair_chart(chart, width="stretch")
         
+        
+
         
 
 # ##########################################
