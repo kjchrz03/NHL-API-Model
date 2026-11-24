@@ -2283,7 +2283,7 @@ with tab_teams:
                                 ),
                                 alt.Tooltip(
                                     "impact:N",
-                                    title="Direction"
+                                    title="Direction of Impact"
                                 ),
                                 alt.Tooltip(
                                     "consistency:Q",
@@ -2817,7 +2817,19 @@ with tab_teams:
                         # HELPING FEATURES — LEFT COLUMN
                         with col_helping:
 
-                            st.markdown("**Helping Features are Solid Lines**")
+                            st.markdown(
+                                """
+                                    <div style="
+                                        font-size:20px;
+                                        font-weight:700;
+                                        color:#D1D5DB;
+                                        margin-bottom: 2px;
+                                    ">
+                                        Helping Features are Solid Lines
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True
+                                )
 
                             helping_features = legend_df[
                                 legend_df["impact"] == "Helping"
@@ -2851,8 +2863,20 @@ with tab_teams:
 
                         # HURTING FEATURES — RIGHT COLUMN
                         with col_hurting:
-
-                            st.markdown("**Hurting Features are Dashed Lines**")
+                            st.markdown("<div style='height:30px;'></div>", unsafe_allow_html=True)
+                            st.markdown(
+                                """
+                                <div style="
+                                    font-size:20px;
+                                    font-weight:700;
+                                    color:#D1D5DB;
+                                    margin-bottom: 2px;
+                                ">
+                                    Hurting Features are Dashed Lines
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
 
                             hurting_features = legend_df[
                                 legend_df["impact"] == "Hurting"
