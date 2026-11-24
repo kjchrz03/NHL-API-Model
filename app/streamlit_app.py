@@ -3310,10 +3310,7 @@ with tab_teams:
         
 
 # ##########################################
-# ## Teams Tab                            ##
+# ## What Ifs Tab                            ##
 # ##########################################
-# with tab_whatif:
-
-#     cols = st.columns([1, 3])
-
-#     @st.cache_data(ttl="6h")
+with tab_whatif:
+    st.markdown("### Coming Soon")
