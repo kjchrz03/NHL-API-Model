@@ -39,7 +39,7 @@ st.set_page_config(page_title="Check This Data",
 primaryColor="#fafaff"
 backgroundColor="#e1dee9"
 secondaryBackgroundColor="#d5cfe1"
-textColor="#262730"
+textColor="#48484E"
 font="Garamond"
 
 option = {
