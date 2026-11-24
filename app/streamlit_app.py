@@ -932,7 +932,7 @@ with tab_txgiving:
                             labelOverlap=False,
                             labelLimit=100,
                             labelPadding=8,
-                            labelFontSize=10,
+                            labelFontSize=5,
                             labelExpr="""
                                 indexof(
                                     [
