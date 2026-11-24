@@ -6,6 +6,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from streamlit_echarts import st_echarts
 import traceback 
+import html
 import altair as alt
 import pandas as pd
 import numpy as np
@@ -960,7 +961,7 @@ with tab_txgiving:
                             """
                         )
                     )
-                )
+                         )
 
                 # ----------------------------------------------------
                 # BARS → Displayed Playoff Probability Today
@@ -988,16 +989,7 @@ with tab_txgiving:
                             title="Displayed Probability",
                             format=".1%"
                         ),
-                        # alt.Tooltip(
-                        #     "playoff_prob_xgb:Q",
-                        #     title="XGP Model",
-                        #     format=".1%"
-                        # ),
-                        # alt.Tooltip(
-                        #     "playoff_prob_rf:Q",
-                        #     title="RF Model",
-                        #     format=".1%"
-                        # ),
+
                         alt.Tooltip(
                             "playoff_tier:N",
                             title="Playoff Prediction"
@@ -1014,11 +1006,12 @@ with tab_txgiving:
                 ).encode(
                     y=alt.Y(
                         "prob_lower:Q",
-                        scale=alt.Scale(domain=[0, 1])
+                        title="Playoff Probability",
+                        scale=alt.Scale(domain=[0, 1]),
+                        axis=alt.Axis(format=".0%")
                     ),
                     y2="prob_upper:Q"
                 )
-
                 # ----------------------------------------------------
                 # COMBINE CHARTS
                 # ----------------------------------------------------
@@ -1028,6 +1021,9 @@ with tab_txgiving:
                         title=f"Playoff Probability — {date_label}",
                         height=500
                     )
+                    .configure_axisY(
+                        title="Playoff Probability"
+                    )
                     .configure_legend(
                         orient="bottom",
                         padding=0,
@@ -1035,7 +1031,6 @@ with tab_txgiving:
                         title=None
                     )
                 )
-
                 st.altair_chart(combined_chart, width="stretch")
                 
         with right_cell:
@@ -2567,7 +2562,7 @@ with tab_teams:
                                 get_feature_description(selected_feature)
                             )
                             
-                                                        # ====================================================
+                            # ====================================================
                             # HOME / ROAD PERFORMANCE CONTEXT
                             # ====================================================
 
@@ -2647,119 +2642,251 @@ with tab_teams:
                     # ====================================================
 
                     st.divider()
-                # ====================================================
-                # CHART 3 — SEASON PROGRESSION
-                # ====================================================
+       
+                    # ====================================================
+                    # CHART 3 — SEASON PROGRESSION
+                    # ====================================================
 
-                st.subheader("How Playoff Drivers Evolve")
+                    st.subheader("How Playoff Drivers Evolve")
 
-                # Keep only features from the current top-five rankings
-                progression_parts = []
+                    # Keep only features from the current top-five rankings
+                    progression_parts = []
 
-                for _, row in chart_shap.iterrows():
-                    
-                    feature_data = team_shap[
-                        team_shap["feature"] == row["feature"]
-                    ].copy()
+                    for _, row in chart_shap.iterrows():
 
-                    feature_data["impact"] = row["impact"]
+                        feature_data = team_shap[
+                            team_shap["feature"] == row["feature"]
+                        ].copy()
 
-                    feature_data["frequency"] = (
-                        feature_data["pct_positive"]
-                        if row["impact"] == "Helping"
-                        else feature_data["pct_negative"]
-                    )
+                        if feature_data.empty:
+                            continue
 
-                    # Convert feature name to plain English
-                    feature_data["feature_label"] = get_feature_label(
-                        row["feature"]
-                    )
+                        feature_data["impact"] = row["impact"]
 
-                    # Use readable labels in the chart legend
-                    feature_data["series"] = (
-                        feature_data["feature_label"] + " (" + row["impact"] + ")"
-                    )
+                        feature_data["frequency"] = (
+                            feature_data["pct_positive"]
+                            if row["impact"] == "Helping"
+                            else feature_data["pct_negative"]
+                        )
 
-                    progression_parts.append(feature_data)
+                        # Convert feature name to plain English
+                        feature_data["feature_label"] = get_feature_label(
+                            row["feature"]
+                        )
 
-                if progression_parts:
+                        # Unique series name for chart colors
+                        feature_data["series"] = (
+                            feature_data["feature_label"]
+                            + " ("
+                            + row["impact"]
+                            + ")"
+                        )
 
-                    progression_df = pd.concat(
-                        progression_parts,
-                        ignore_index=True
-                    )
+                        progression_parts.append(feature_data)
 
-                    # Keep your existing progression_chart code here,
-                    # indented inside this if statement
 
-                else:
-                    st.info("No feature progression data available.")
+                    if progression_parts:
 
-                progression_chart = (
-                    alt.Chart(progression_df)
-                    .mark_line(point=True)
-                    .encode(
-                        x=alt.X(
-                            "game_date:T",
-                            title="Snapshot Date"
-                        ),
-                        y=alt.Y(
-                            "frequency:Q",
-                            title="Season-to-Date Snapshot Frequency",
-                            scale=alt.Scale(domain=[0, 1]),
-                            axis=alt.Axis(format=".0%")
-                        ),
-                        color=alt.Color(
-                                "series:N",
-                                title="Feature",
-                                legend=alt.Legend(
-                                    orient="bottom",
-                                    columns=2,
-                                    labelLimit=350,
-                                    labelFontSize=12,
-                                    symbolSize=100
-                                )
-                            ),
-                        strokeDash=alt.StrokeDash(
-                            "impact:N",
-                            scale=alt.Scale(
-                                domain=["Helping", "Hurting"],
-                                range=[[1, 0], [5, 4]]
-                            ),
-                            legend=None
-                        ),
-                        tooltip=[
-                            alt.Tooltip("feature_label:N", title="Feature"),
-                            alt.Tooltip("impact:N", title="Direction"),
-                            alt.Tooltip(
-                                "game_date:T",
-                                title="Date",
-                                format="%b %d, %Y"
-                            ),
-                            alt.Tooltip(
-                                "frequency:Q",
-                                title="Season-to-Date Frequency",
-                                format=".1%"
-                            ),
-                            alt.Tooltip(
-                                "avg_shap:Q",
-                                title="Average SHAP",
-                                format="+.4f"
-                            ),
-                            alt.Tooltip(
-                                "snapshots:Q",
-                                title="Snapshots Analyzed"
-                            )
+                        progression_df = pd.concat(
+                            progression_parts,
+                            ignore_index=True
+                        )
+
+                        # ----------------------------------------------------
+                        # CONSISTENT COLORS FOR CHART AND LEGEND
+                        # ----------------------------------------------------
+
+                        series_order = (
+                            progression_df["series"]
+                            .drop_duplicates()
+                            .tolist()
+                        )
+
+                        legend_colors = [
+                            "#72C4F7",
+                            "#0074D9",
+                            "#FFB3BA",
+                            "#FF3038",
+                            "#75E8A5",
+                            "#20B2AA",
+                            "#FFD166",
+                            "#FF9500",
+                            "#753BBD",
+                            "#D9DDE5"
                         ]
-                    )
-                    .properties(height=800)
-                    .interactive()
-                )
 
-                st.altair_chart(
-                    progression_chart,
-                    width="stretch"
-                )
+                        color_map = {
+                            series: legend_colors[i % len(legend_colors)]
+                            for i, series in enumerate(series_order)
+                        }
+
+                        # ----------------------------------------------------
+                        # SEASON PROGRESSION CHART
+                        # ----------------------------------------------------
+
+                        progression_chart = (
+                            alt.Chart(progression_df)
+                            .mark_line(point=True)
+                            .encode(
+                                x=alt.X(
+                                    "game_date:T",
+                                    title="Snapshot Date"
+                                ),
+                                y=alt.Y(
+                                    "frequency:Q",
+                                    title="Season-to-Date Snapshot Frequency",
+                                    scale=alt.Scale(domain=[0, 1]),
+                                    axis=alt.Axis(format=".0%")
+                                ),
+                                color=alt.Color(
+                                    "series:N",
+                                    scale=alt.Scale(
+                                        domain=series_order,
+                                        range=[
+                                            color_map[s]
+                                            for s in series_order
+                                        ]
+                                    ),
+                                    legend=None
+                                ),
+                                strokeDash=alt.StrokeDash(
+                                    "impact:N",
+                                    scale=alt.Scale(
+                                        domain=["Helping", "Hurting"],
+                                        range=[[1, 0], [5, 4]]
+                                    ),
+                                    legend=None
+                                ),
+                                tooltip=[
+                                    alt.Tooltip(
+                                        "feature_label:N",
+                                        title="Feature"
+                                    ),
+                                    alt.Tooltip(
+                                        "impact:N",
+                                        title="Direction"
+                                    ),
+                                    alt.Tooltip(
+                                        "game_date:T",
+                                        title="Date",
+                                        format="%b %d, %Y"
+                                    ),
+                                    alt.Tooltip(
+                                        "frequency:Q",
+                                        title="Season-to-Date Frequency",
+                                        format=".1%"
+                                    ),
+                                    alt.Tooltip(
+                                        "avg_shap:Q",
+                                        title="Average SHAP",
+                                        format="+.4f"
+                                    ),
+                                    alt.Tooltip(
+                                        "snapshots:Q",
+                                        title="Snapshots Analyzed"
+                                    )
+                                ]
+                            )
+                            .properties(height=800)
+                            .interactive()
+                        )
+
+                        st.altair_chart(
+                            progression_chart,
+                            width="stretch"
+                        )
+
+                        # ----------------------------------------------------
+                        # CUSTOM TWO-COLUMN LEGEND
+                        # ----------------------------------------------------
+
+                        st.markdown("#### Feature Legend")
+
+                        legend_df = (
+                            progression_df[
+                                ["series", "feature_label", "impact"]
+                            ]
+                            .drop_duplicates()
+                        )
+
+                        col_helping, col_hurting = st.columns(
+                            2,
+                            gap="small"
+                        )
+
+                        # HELPING FEATURES — LEFT COLUMN
+                        with col_helping:
+
+                            st.markdown("**Helping Features are Solid Lines**")
+
+                            helping_features = legend_df[
+                                legend_df["impact"] == "Helping"
+                            ]
+
+                            for _, feature in helping_features.iterrows():
+
+                                color = color_map[feature["series"]]
+
+                                st.markdown(
+                                    f'<div style="'
+                                    f'display:flex;'
+                                    f'align-items:baseline;'
+                                    f'gap:1px;'
+                                    f'margin-bottom:0px;'
+                                    f'">'
+                                    f'<span style="'
+                                    f'color:{color};'
+                                    f'font-size:20px;'
+                                    f'flex-shrink:0;'
+                                    f'">●</span>'
+                                    f'<span style="'
+                                    f'color:#D1D5DB;'
+                                    f'font-size:14px;'
+                                    f'line-height:1;'
+                                    f'overflow-wrap:anywhere;'
+                                    f'">{html.escape(str(feature["feature_label"]))}</span>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+
+                        # HURTING FEATURES — RIGHT COLUMN
+                        with col_hurting:
+
+                            st.markdown("**Hurting Features are Dashed Lines**")
+
+                            hurting_features = legend_df[
+                                legend_df["impact"] == "Hurting"
+                            ]
+
+                            for _, feature in hurting_features.iterrows():
+
+                                color = color_map[feature["series"]]
+
+                                st.markdown(
+                                    f'<div style="'
+                                    f'display:flex;'
+                                    f'align-items:baseline;'
+                                    f'gap:10px;'
+                                    f'margin-bottom:0px;'
+                                    f'">'
+                                    f'<span style="'
+                                    f'color:{color};'
+                                    f'font-size:20px;'
+                                    f'flex-shrink:0;'
+                                    f'">●</span>'
+                                    f'<span style="'
+                                    f'color:#D1D5DB;'
+                                    f'font-size:14px;'
+                                    f'line-height:1;'
+                                    f'overflow-wrap:anywhere;'
+                                    f'">{html.escape(str(feature["feature_label"]))}</span>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+
+                    else:
+                        st.info("No feature progression data available.")
+
                                    
     # ===============================================
     # CUSTOM SELECTION — MULTI-PICK PILL BUTTONS
