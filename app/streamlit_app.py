@@ -490,11 +490,11 @@ def todays_standings():
                         display: flex; 
                         gap: 5px;">               
         
-            """
-
+                        """
             # Team logo circles
-            for team_info in teams:
+            for i, team_info in enumerate(teams):
                 tooltip = f"{team_info['team']} - {team_info['division']} Division"
+
                 html_content += f"""
                 <div title="{tooltip}"
                     style="background-color: white;
@@ -503,29 +503,16 @@ def todays_standings():
                             display: flex;
                             align-items: center;
                             justify-content: center;
-                            margin-left: 10px;">
+                            margin-left: {10 if i == 0 else 0}px;">
                     <img src="{team_info['logo']}"
                         alt="{team_info['team']} Logo"
                         width="50" height="50"
                         style="border-radius: 50%;">
                 </div>
                 """
-                
-            # # Close logos container
-            html_content += "</div>"
 
-            # Dot on the vertical line
-            html_content += f"""
-            <div style="position: absolute; 
-                        left: 60px; 
-                        top: {position}px;
-                        width: 10px; 
-                        height: 10px; 
-                        background-color: #FFCDB2;
-                        border-radius: 50%; 
-                        transform: translateX(-50%);">
-            </div>
-            """
+            # Close logos container
+            html_content += "</div>"
 
         # Close outer container
         html_content += "</div>"
@@ -545,7 +532,7 @@ def todays_standings():
         </div>
         """
 
-        components.html(centered_html, height=scale_height + 150, scrolling=False)
+        st.html(centered_html)
 
     except Exception as e:
         st.error(f"Error loading standings data: {e}")
@@ -2974,9 +2961,9 @@ with tab_teams:
     "ANA": "#F47A38",
     "ARI": "#8C2633",
     "BOS": "#FFB81C",
-    "BUF": "#002654",
+    "BUF": "#A0C5F1",
     "CAR": "#CC0000",
-    "CBJ": "#002654",
+    "CBJ": "#5F89BC",
     "CGY": "#C8102E",
     "CHI": "#CF0A2C",
     "COL": "#6F263D",
@@ -2984,25 +2971,25 @@ with tab_teams:
     "DET": "#CE1126",
     "EDM": "#FF4C00",
     "FLA": "#B9975B",
-    "LAK": "#F7F3F3",
+    "LAK": "#C64EF2",
     "MIN": "#154734",
     "MTL": "#AF1E2D",
     "NJD": "#CE1126",
     "NSH": "#FFB81C",
-    "NYI": "#00529B",
+    "NYI": "#F68427",
     "NYR": "#0038A8",
     "OTT": "#DA1A32",
     "PHI": "#F74902",
     "PIT": "#FCB514",
-    "SEA": "#99D9D9",
+    "SEA": "#1CD1D1",
     "SJS": "#006D75",
-    "STL": "#002F87",
-    "TBL": "#002868",
-    "TOR": "#00205B",
-    "UTA": "#6F2DA8",
-    "VAN": "#00205B",
+    "STL": "#3174F2",
+    "TBL": "#A6BBDD",
+    "TOR": "#0651DC",
+    "UTA": "#05F9F9",
+    "VAN": "#C6E8F8",
     "VGK": "#B4975A",
-    "WPG": "#041E42",
+    "WPG": "#99B8E2",
     "WSH": "#C8102E",
     }
 
