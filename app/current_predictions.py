@@ -6,17 +6,23 @@ import os
 import time
 import random
 import duckdb
-
 import html
 import logging
+from explainability.feature_metadata import (
+    FEATURE_LABELS,
+    FEATURE_DESCRIPTIONS,
+    get_feature_label,
+    get_feature_description,
+)
 
 logger = logging.getLogger(__name__)
-
 
 
 # ============================================================
 # SAFE REQUEST WITH BACKOFF
 # ============================================================
+
+
 def safe_request(url, params=None, max_retries=5):
     delay = 1
 
@@ -59,6 +65,8 @@ pd.set_option("display.max_rows", None)
 # ============================================================
 # FETCH CURRENT PLAYOFF PREDICTIONS
 # ============================================================
+
+
 def fetch_current_predictions(season_id, model_version="v6"):
 
     con = None
@@ -168,7 +176,7 @@ def fetch_current_predictions(season_id, model_version="v6"):
                 "Found %s duplicate team/date game keys",
                 duplicate_game_keys
             )
-        
+
         # ====================================================
         # 5. FETCH TEAM INFORMATION
         # ====================================================
@@ -176,11 +184,10 @@ def fetch_current_predictions(season_id, model_version="v6"):
             SELECT *
             FROM all_teams
         """).df()
-        
+
         teams = teams[
             ["team_id","tri_code", "team_name"]
             ].drop_duplicates(subset=["team_id"])
-        
 
         # ====================================================
         # ADD OPPONENT NAMES
@@ -222,7 +229,6 @@ def fetch_current_predictions(season_id, model_version="v6"):
             predictions = predictions.drop(
                 columns=["team_name"]
             )
-
 
         predictions = predictions.merge(
             teams[["team_id", "team_name"]],
@@ -319,9 +325,12 @@ def fetch_current_predictions(season_id, model_version="v6"):
         if con is not None:
             con.close()
 
+
 # ============================================================
 # FETCH SHAP VALUES
 # ============================================================
+
+
 def fetch_shap_values(season_id, model_version="v6"):
 
     con = duckdb.connect(DB_PATH, read_only=True)
@@ -329,7 +338,7 @@ def fetch_shap_values(season_id, model_version="v6"):
     try:
         shap_df = con.execute("""
             SELECT *
-            FROM playoff_shap_values_v2
+            FROM playoff_shap_values_v6_balanced
             WHERE season_id = ?
               AND model_version = ?
             ORDER BY game_date, tri_code
@@ -340,15 +349,17 @@ def fetch_shap_values(season_id, model_version="v6"):
     finally:
         con.close()
 
+
 # ============================================================
 # FETCH SHAP SUMMARY
 # ============================================================
+
 
 def fetch_shap_summary(season_id, model_version="v6"):
 
     # Match the version-specific tables in shap_summary.py
     if model_version == "v6":
-        table_name = "playoff_shap_summary"
+        table_name = "playoff_shap_summary_v6_balanced"
     else:
         import re
 
@@ -442,9 +453,12 @@ def fetch_shap_summary(season_id, model_version="v6"):
         if con is not None:
             con.close()
 
+
 # ============================================================
 # EXTRACT TOP POSITIVE AND NEGATIVE SHAP CONTRIBUTORS
 # ============================================================
+
+
 def get_top_shap_features(df, top_n=5):
 
     if top_n < 1:
@@ -560,6 +574,7 @@ def get_top_shap_features(df, top_n=5):
 
     return top_shap
 
+
 def calculate_shap_consistency(shap_df):
 
     if shap_df.empty:
@@ -660,329 +675,12 @@ def calculate_shap_consistency(shap_df):
 
     return shap_long
 
-FEATURE_LABELS = {
-    "c_corsi_diff": "Current Corsi Differential",
-    "c_hd_goals": "Current High-Danger Goals",
-    "c_hd_sog": "Current High-Danger Shots on Goal",
-    "c_HDCA": "Current High-Danger Chances Against",
-    "c_HDCF": "Current High-Danger Chances For",
-    "c_ld_against": "Current Low-Danger Chances Against",
-    "c_ld_goals": "Current Low-Danger Goals",
-    "c_ld_sog": "Current Low-Danger Shots on Goal",
-    "c_LDCA": "Current Low-Danger Chances Against",
-    "c_md_goals": "Current Medium-Danger Goals",
-    "c_md_sog": "Current Medium-Danger Shots on Goal",
-    "c_pdo": "Current PDO",
-    "c_pp_ga": "Current Power Play Goals Against",
-    "c_pp_net_g": "Current Net Power Play Goals",
-    "c_rush_diff": "Current Rush Differential",
-    "c_rush_shots_against": "Current Rush Shots Against",
-    "c_rush_shots_for": "Current Rush Shots For",
-    "c_shot_pct": "Current Shooting Percentage",
-    "c_shots_diff": "Current Shot Differential",
-    "c_sv_pct": "Current Save Percentage",
-    "c_times_sh": "Current Times Shorthanded",
-    "conf_playoff_chance_baseline": "Conference Playoff Probability Baseline",
-    "conference_home_rank": "Conference Home Rank",
-    "conference_rank": "Conference Rank",
-    "conference_road_rank": "Conference Road Ranking",
-    "conference_team_count": "Number of Conference Teams",
-    "corsi_diff_per_game": "Corsi Differential per Game",
-    "corsi_net_rel": "Relative Net Corsi",
-    "corsi_x_season": "Corsi × Season Progress",
-    "corsi_x_special_teams": "Corsi × Special Teams",
-    "division_home_rank": "Division Home Ranking",
-    "division_rank": "Division Ranking",
-    "division_road_rank": "Division Road Ranking",
-    "games_remaining": "Games Remaining",
-    "gf_pctg": "Goals For Percentage",
-    "goal_diff": "Goal Differential",
-    "goal_diff_pctg": "Goal Differential Percentage",
-    "home_ga": "Home Goals Against",
-    "home_gf": "Home Goals For",
-    "home_goal_diff": "Home Goal Differential",
-    "home_gp": "Home Games Played",
-    "home_losses": "Home Losses",
-    "home_otlosses": "Home Overtime Losses",
-    "home_points": "Home Points",
-    "home_rotw": "Home Regulation and Overtime Wins",
-    "home_rw": "Home Regulation Wins",
-    "home_wins": "Home Wins",
-    "league_home_rank": "League Home Ranking",
-    "league_last_10_rank": "League Ranking — Last 10 Games",
-    "league_rank": "League Ranking",
-    "league_road_rank": "League Road Ranking",
-    "losses": "Losses",
-    "ot_games_pct": "Percentage of Games Reaching Overtime",
-    "ot_losses": "Overtime Losses",
-    "ot_wins": "Overtime Wins",
-    "overtimes": "Overtime Games",
-    "pdo_x_corsi": "PDO × Corsi",
-    "penalties_x_season": "Penalties × Season Progress",
-    "penalty_risk": "Penalty Risk",
-    "pk_load_x_pk_pct": "Penalty Kill Workload × Kill Percentage",
-    "pk_net_gpg": "Net Penalty Kill Goals per Game",
-    "pk_net_pct": "Net Penalty Kill Percentage",
-    "pk_stress_x_season": "Penalty Kill Stress × Season Progress",
-    "points_pct": "Points Percentage",
-    "pp_ga_pg": "Power Play Goals Against per Game",
-    "pp_gpg": "Power Play Goals per Game",
-    "pp_net_gpg": "Net Power Play Goals per Game",
-    "pp_net_pct": "Net Power Play Percentage",
-    "pp_opp_pg": "Power Play Opportunities per Game",
-    "ppng_rank": "Net Power Play Goals Ranking",
-    "projected_points": "Projected Season Points",
-    "pt_pct_x_sos": "Points Percentage × Strength of Schedule",
-    "road_ga": "Road Goals Against",
-    "road_gf": "Road Goals For",
-    "road_goal_diff": "Road Goal Differential",
-    "road_gp": "Road Games Played",
-    "road_losses": "Road Losses",
-    "road_ot_losses": "Road Overtime Losses",
-    "road_points": "Road Points",
-    "road_rotw": "Road Regulation and Overtime Wins",
-    "road_rw": "Road Regulation Wins",
-    "road_wins": "Road Wins",
-    "rotw": "Regulation and Overtime Wins",
-    "rotw_pctg": "Regulation and Overtime Win Percentage",
-    "rush_against_per_game": "Rush Chances Against per Game",
-    "rush_balance_ratio": "Rush Chance Balance Ratio",
-    "rush_diff_per_game": "Rush Differential per Game",
-    "rush_for_per_game": "Rush Chances For per Game",
-    "rush_net_x_season": "Season-Adjusted Net Rush Chances",
-    "rush_x_special_teams": "Rush Chances × Special Teams",
-    "rw": "Regulation Wins",
-    "SCA_pg": "Scoring Chances Against per Game",
-    "sc_net": "Net Scoring Chances",
-    "SCF_pg": "Scoring Chances For per Game",
-    "sh_ga_pg": "Shorthanded Goals Against per Game",
-    "sh_gf_pg": "Shorthanded Goals For per Game",
-    "shot_attempts_against_per_game": "Shot Attempts Against per Game",
-    "shot_attempts_for_per_game": "Shot Attempts For per Game",
-    "shots_diff_per_game": "Shot Differential per Game",
-    "so_losses": "Shootout Losses",
-    "so_wins": "Shootout Wins",
-    "sos_future": "Remaining Strength of Schedule",
-    "sos_past": "Past Strength of Schedule",
-    "special_teams_net": "Net Special Teams Performance",
-    "special_teams_x_season": "Special Teams × Season Progress",
-    "times_sh_pg": "Times Shorthanded per Game",
-    "urgency": "Playoff Urgency",
-    "urgency_x_points": "Playoff Urgency × Points",
-    "wc2_points": "Second Wild Card Team Points",
-    "wc2_points_pct": "Second Wild Card Team Points Percentage",
-    "wc_points_margin": "Wild Card Points Margin",
-    "wc_points_pct_margin": "Wild Card Points Percentage Margin",
-    "wc_pressure_x_performance": "Wild Card Pressure × Performance",
-    "wc_teams_within_2pts": "Wild Card Teams Within 2 Points",
-    "wc_teams_within_4pts": "Wild Card Teams Within 4 Points",
-    "wc_teams_within_6pts": "Wild Card Teams Within 6 Points",
-    "wildcard_rank": "Wild Card Ranking",
-    "win_pct_before": "Previous Win Percentage",
-    "wins": "Wins",
-    "wins_before": "Previous Wins",
-    "wins_pctg": "Win Percentage",
-}
-
-def get_feature_label(feature):
-    return FEATURE_LABELS.get(
-        feature,
-        feature.replace("_", " ").title()
-    )
-
-# ============================================================
-# FEATURE DESCRIPTIONS
-# ============================================================
-
-FEATURE_DESCRIPTIONS = {
-
-    # --------------------------------------------------------
-    # CURRENT PERFORMANCE
-    # --------------------------------------------------------
-
-    "c_corsi_diff": (
-        "Corsi is a way to measure a team's possession of the puck. This feature compares all shot attempts made by the team to all shot attempts made against the team over the course of the season. "
-        "If the team's cumulative shot attempts for exceeds cumulative shots against, playoff chances improve."
-    ),
-
-    "c_hd_goals": (
-        "The cumulative number of goals for the team from high danger scoring areas. The more goals scored here by the team improves playoff chances."
-    ),
-
-    "c_hd_sog": (
-        "A cumulative count of shots on goal by the team from dangerous scoring areas. More shots on goal in this location improves playoff chances."
-    ),
-
-    "c_HDCA": (
-        "The cumulative number of high danger scoring chances against the team over the course of the season. More scoring chances against the team hurts playoff chances. "
-    ),
-
-    "c_HDCF": (
-        "The cumulative number of high-danger scoring chances created by the team over the season. "
-        "Creating more chances from dangerous areas generally improves playoff chances."
-    ),
-
-    "c_ld_against": (
-        "Tracks the team's cumulative low-danger opportunities allowed to opponents. Allowing fewer "
-        "opportunities from these areas generally supports playoff chances, although the impact is "
-        "usually smaller than allowing high-danger chances."
-    ),
-
-    "c_ld_goals": (
-      "The cumulative number of goals scored by the team from low-danger areas. Scoring more goals "
-        "from these locations improves playoff chances."
-    ),
-
-    "c_ld_sog": (
-          "The cumulative number of shots on goal taken by the team from low-danger areas. More shots "
-        "can support playoff chances, but these attempts are less likely to become goals than "
-        "high-danger shots."
-    ),
-
-    "c_LDCA": (
-        "The cumulative number of low-danger scoring chances allowed to opponents. Allowing fewer "
-        "chances helps limit opposing offense and generally supports playoff chances."
-    ),
-
-    "c_md_goals": (
-        "The cumulative number of goals scored by the team from medium-danger areas. More goals from "
-        "these areas improve playoff chances."
-    ),
-
-    "c_md_sog": (
-        "The cumulative number of shots on goal taken by the team from medium-danger areas. "
-        "Generating more of these shots generally supports playoff chances by creating scoring "
-        "opportunities."
-    ),
-
-    "c_pdo": (
-       "PDO combines a team's shooting percentage and save percentage to show how effectively it "
-        "scores on its shots and stops opponents' shots. A higher PDO generally supports playoff "
-        "chances, although unusually high or low values can be difficult to sustain."
-    ),
-
-    "c_pp_ga": (
-        "The cumulative number of goals allowed by the team during its own power plays. Allowing "
-        "fewer shorthanded goals to opponents helps protect scoring advantages and improves playoff "
-        "chances."
-    ),
-
-    "c_pp_net_g": (
-        "The cumulative difference between goals scored and goals allowed during the team's power "
-        "plays. A larger positive difference means the power play is producing more goals than it "
-        "concedes, improving playoff chances."
-    ),
-
-    "c_rush_diff": (
-        "The cumulative difference between rush opportunities created by the team and those allowed "
-        "to opponents. Creating more rush opportunities than the team allows generally improves "
-        "playoff chances."
-    ),
-    
-    "c_rush_shots_against": (
-         "The cumulative number of shots on goal allowed when opponents attack off the rush. Allowing "
-        "fewer rush shots reduces dangerous scoring opportunities and generally improves playoff "
-        "chances."
-    ),
-
-    "c_rush_shots_for": (
-        "The cumulative number of shots on goal generated when the team attacks off the rush. More "
-        "rush shots create additional scoring opportunities and generally improve playoff chances."
-
-    ),
-
-    "c_shot_pct": (
-        "The percentage of the team's shots on goal that become goals. A higher shooting percentage "
-        "means the team converts more of its shots into goals, generally improving playoff chances."
-        "allows. A positive difference means the team puts more shots on net than its opponents and "
-        "generally improves playoff chances."
-    ),
-
-    # --------------------------------------------------------
-    # PLAYOFF RACE AND URGENCY
-    # --------------------------------------------------------
-
-    "urgency": (
-        "Measures the pressure the team faces based on its position in the playoff race. Greater "
-        "urgency can indicate that the team needs points quickly, but does not by itself improve "
-        "playoff chances; the impact depends on the team's standings position."
-    ),
-
-    "urgency_x_points": (
-        "Combines the team's playoff-race urgency with its standings points. It helps the model "
-        "assess how much the team's point total matters under its current playoff pressure, rather "
-        "than treating urgency alone as a positive or negative sign."
-    ),
-
-    "wc2_points": (
-        "The number of standings points held by the team in the second wild-card playoff position. A "
-        "higher cutoff means teams chasing that spot generally need more points, which can make "
-        "qualifying harder."
-    ),
-
-    "wc2_points_pct": (
-        "The points percentage of the team holding the second wild-card playoff position. A higher "
-        "cutoff percentage indicates a stronger pace is needed to qualify and can make the playoff "
-        "race more difficult."
-    ),
-
-    "wc_points_margin": (
-        "The difference in standings points between the team and the wild-card cutoff. A more "
-        "positive margin means the team is farther above the cutoff, generally improving playoff "
-        "chances; a negative margin means it is chasing a playoff spot."
-    ),
-
-    "wc_points_pct_margin": (
-        "The difference between the team's points percentage and the wild-card cutoff points "
-        "percentage. A more positive margin generally improves playoff chances and helps compare "
-        "teams that have played different numbers of games."
-    ),
-
-    "wc_pressure_x_performance": (
-        "Combines the pressure of the wild-card race with the team's current performance. Strong "
-        "performance under greater playoff pressure generally supports playoff chances, while falling "
-        "behind in a tight race hurts them."
-    ),
-
-    "wc_teams_within_2pts": (
-        "The number of teams within two standings points of the wild-card cutoff. More teams close to "
-        "the cutoff generally indicate a tighter playoff race and more competition for the available "
-        "spots."
-    ),
-
-    "wc_teams_within_4pts": (
-        "The number of teams within four standings points of the wild-card cutoff. More teams in this "
-        "range generally indicate greater competition for wild-card positions."
-    ),
-
-    "wc_teams_within_6pts": (
-        "The number of teams within six standings points of the wild-card cutoff. More teams in this "
-        "range suggest a crowded playoff race, although not every team is equally likely to qualify."
-    ),
-
-    "wildcard_rank": (
-        "The team's current ranking in the wild-card race. A better ranking generally improves "
-        "playoff chances because the team is closer to securing one of the available playoff spots."
-    ),
-}
-
-
-# ============================================================
-# GET FEATURE DESCRIPTION
-# ============================================================
-
-def get_feature_description(feature):
-    return FEATURE_DESCRIPTIONS.get(
-        feature,
-        "This statistic helps the model evaluate the team's "
-        "playoff chances. Green means it is raising the model's "
-        "prediction, while red means it is lowering it."
-    )
-
 
 # ============================================================
 # OPTIONAL: TEST FUNCTIONS WHEN RUN DIRECTLY
 # ============================================================
+
+
 if __name__ == "__main__":
 
     season_id = 20262027
@@ -1003,7 +701,7 @@ if __name__ == "__main__":
     )
 
     print(f"SHAP records: {len(shap_df):,}")
-    
+
     shap_summary_df = fetch_shap_summary(
         season_id=season_id,
         model_version=model_version

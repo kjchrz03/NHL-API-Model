@@ -32,6 +32,7 @@ from prediction_model.inference.daily_playoff_probability import run_probability
 # Model - explainability
 from prediction_model.explainability.daily_feature_predictions import run_prediction_features
 from prediction_model.explainability.shap_summary import update_shap_summary
+from prediction_model.explainability.game_shap_explanations import run_game_shap_explanations
 
 
 # --------------------------------------------------
@@ -381,7 +382,10 @@ def main():
                     "SHAP Summary",
                     "an upstream dependency failed"
                 )
+                shap_summary_failed = True
             else:
+                failures_before = len(failures)
+
                 run_step(
                     "SHAP Summary",
                     update_shap_summary,
@@ -391,6 +395,34 @@ def main():
                     con=con
                 )
 
+                shap_summary_failed = (
+                    len(failures) > failures_before
+                )
+
+        # ---------------------------------------------------------
+        # Game-Level SHAP Explanations
+        # ---------------------------------------------------------
+        if not args.skip_features:
+            if (
+                ingestion_failures
+                or prediction_data_failed
+                or probabilities_failed
+                or prediction_features_failed
+                or shap_summary_failed
+            ):
+                block_step(
+                    "Game-Level SHAP Explanations",
+                    "an upstream dependency failed"
+                )
+            else:
+                run_step(
+                    "Game-Level SHAP Explanations",
+                    run_game_shap_explanations,
+                    continue_on_error=args.continue_on_error,
+                    failures=failures,
+                    season_id=season["season_id"],
+                    con=con
+                )
         status = "PARTIAL_FAILURE" if failures or blocked_steps else "SUCCESS"
         log_messages = failures + [f"BLOCKED: {item}" for item in blocked_steps]
         error_message = "\n".join(log_messages) if log_messages else None

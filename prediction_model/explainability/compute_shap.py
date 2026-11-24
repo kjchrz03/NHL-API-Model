@@ -1,11 +1,16 @@
+
 """Visualize stored historical daily XGBoost SHAP explanations.
 
-Reads playoff_shap_values_v2; never modifies the database. Feature values
-for plot coloring are reconstructed from point-in-time team statistics.
-"""
-from __future__ import annotations
-import re
+Reads playoff_shap_values_v6_balanced for model v6.
+Never modifies the database.
 
+Feature values for plot coloring are reconstructed from
+point-in-time team statistics.
+"""
+
+from __future__ import annotations
+
+import re
 from datetime import date
 
 import duckdb
@@ -21,30 +26,43 @@ from feature_engineering import build_features
 
 FEATURE_SOURCE_TABLE = "team_daily_stats"
 
+
 def _shap_table_for_version(version: str) -> str:
-    """Preserve the v6 legacy table; use dedicated tables for newer models."""
-    if version == "v6":
-        return "playoff_shap_values_v2"
+    """Use balanced SHAP for v6; preserve legacy tables."""
+
     if not re.fullmatch(r"v[0-9]+", version):
         raise ValueError(f"Unsupported model version: {version}")
-    return f"playoff_shap_values_{version}"
 
+    if version == "v6":
+        return "playoff_shap_values_v6_balanced"
+
+    return f"playoff_shap_values_{version}"
 
 
 bundle = load(MODEL_PATH)
 xgb_pipeline = bundle["xgb_pipeline"]
 FEATURE_COLS = list(bundle["features"])
 MODEL_VERSION_USED = str(bundle["version"])
-FEATURE_TARGET_TABLE = _shap_table_for_version(MODEL_VERSION_USED)
+
+FEATURE_TARGET_TABLE = _shap_table_for_version(
+    MODEL_VERSION_USED
+)
+
 scaler = xgb_pipeline.named_steps.get("scaler")
-SHAP_COLS = [f"shap_{feature}" for feature in FEATURE_COLS]
+
+SHAP_COLS = [
+    f"shap_{feature}"
+    for feature in FEATURE_COLS
+]
 
 
 def _parse_date(value) -> date:
     try:
         return pd.Timestamp(value).date()
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid snapshot_date: {value!r}") from exc
+        raise ValueError(
+            f"Invalid snapshot_date: {value!r}"
+        ) from exc
 
 
 def _resolve_snapshot_date(
@@ -52,31 +70,53 @@ def _resolve_snapshot_date(
     season_id: int,
     snapshot_date=None,
 ) -> date:
+
     if snapshot_date is not None:
+
         selected = _parse_date(snapshot_date)
+
         found = con.execute(
-            f"""SELECT COUNT(*) FROM {FEATURE_TARGET_TABLE}
-                WHERE season_id = ? AND model_version = ?
-                  AND snapshot_date = ?""",
-            [season_id, MODEL_VERSION_USED, selected],
+            f"""
+            SELECT COUNT(*)
+            FROM {FEATURE_TARGET_TABLE}
+            WHERE season_id = ?
+              AND model_version = ?
+              AND snapshot_date = ?
+            """,
+            [
+                season_id,
+                MODEL_VERSION_USED,
+                selected,
+            ],
         ).fetchone()[0]
+
         if not found:
             raise ValueError(
                 f"No stored SHAP data for season={season_id}, "
                 f"date={selected}, model={MODEL_VERSION_USED}"
             )
+
         return selected
 
     latest = con.execute(
-        f"""SELECT MAX(snapshot_date) FROM {FEATURE_TARGET_TABLE}
-            WHERE season_id = ? AND model_version = ?""",
-        [season_id, MODEL_VERSION_USED],
+        f"""
+        SELECT MAX(snapshot_date)
+        FROM {FEATURE_TARGET_TABLE}
+        WHERE season_id = ?
+          AND model_version = ?
+        """,
+        [
+            season_id,
+            MODEL_VERSION_USED,
+        ],
     ).fetchone()[0]
+
     if latest is None:
         raise ValueError(
             f"No stored SHAP data for season={season_id}, "
             f"model={MODEL_VERSION_USED}"
         )
+
     return _parse_date(latest)
 
 
@@ -86,90 +126,267 @@ def load_shap_summary_data(
     season_id: int,
     snapshot_date=None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return (stored SHAP rows, unscaled model features, transformed features).
+    """Return stored SHAP rows, raw features, and transformed features.
 
-    Rows in all three DataFrames are aligned by team_id. Stored SHAP values
-    are not recalculated. The saved model is used only to validate that the
-    reconstructed feature inputs still reproduce the stored probabilities.
+    Rows in all three DataFrames are aligned by team_id.
+
+    Stored SHAP values are not recalculated. The saved model
+    is used only to validate that reconstructed feature inputs
+    reproduce the stored probabilities.
     """
-    selected = _resolve_snapshot_date(con, season_id, snapshot_date)
+
+    selected = _resolve_snapshot_date(
+        con,
+        season_id,
+        snapshot_date,
+    )
 
     stored = con.execute(
-        f"""SELECT * FROM {FEATURE_TARGET_TABLE}
-            WHERE season_id = ? AND snapshot_date = ? AND model_version = ?
-            ORDER BY team_id""",
-        [season_id, selected, MODEL_VERSION_USED],
+        f"""
+        SELECT *
+        FROM {FEATURE_TARGET_TABLE}
+        WHERE season_id = ?
+          AND snapshot_date = ?
+          AND model_version = ?
+        ORDER BY team_id
+        """,
+        [
+            season_id,
+            selected,
+            MODEL_VERSION_USED,
+        ],
     ).df()
-    if stored.empty or stored["team_id"].duplicated().any():
-        raise RuntimeError("Stored SHAP snapshot is empty or has duplicate teams")
 
-    required = ["team_id", "game_date", "xgb_probability","shap_base_value", *SHAP_COLS]
-    missing = [c for c in required if c not in stored.columns]
+    if (
+        stored.empty
+        or stored["team_id"].duplicated().any()
+    ):
+        raise RuntimeError(
+            "Stored SHAP snapshot is empty or has duplicate teams"
+        )
+
+    required = [
+        "team_id",
+        "game_date",
+        "xgb_probability",
+        "shap_base_value",
+        *SHAP_COLS,
+    ]
+
+    missing = [
+        col for col in required
+        if col not in stored.columns
+    ]
+
     if missing:
-        raise ValueError(f"SHAP table missing required columns: {missing}")
+        raise ValueError(
+            f"SHAP table missing required columns: {missing}"
+        )
 
-    # The same as-of selection and batch size used by daily_feature_predictions.
+    # ====================================================
+    # Reconstruct point-in-time team statistics
+    # ====================================================
+
     raw = con.execute(
-        f"""SELECT * FROM {FEATURE_SOURCE_TABLE}
-            WHERE season_id = ? AND CAST(game_date AS DATE) <= ?
-            QUALIFY ROW_NUMBER() OVER (
-                PARTITION BY team_id ORDER BY game_date DESC, game_id DESC
-            ) = 1
-            ORDER BY team_id""",
-        [season_id, selected],
+        f"""
+        SELECT *
+        FROM {FEATURE_SOURCE_TABLE}
+        WHERE season_id = ?
+          AND CAST(game_date AS DATE) <= ?
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY team_id
+            ORDER BY game_date DESC, game_id DESC
+        ) = 1
+        ORDER BY team_id
+        """,
+        [
+            season_id,
+            selected,
+        ],
     ).df()
-    if raw.empty or raw["team_id"].duplicated().any():
-        raise RuntimeError("Source as-of snapshot is empty or has duplicate teams")
+
+    if (
+        raw.empty
+        or raw["team_id"].duplicated().any()
+    ):
+        raise RuntimeError(
+            "Source as-of snapshot is empty or has duplicate teams"
+        )
+
+    # Match feature construction in daily_feature_predictions.py.
+
+    raw["source_game_date"] = raw["game_date"]
+    raw["game_date"] = pd.Timestamp(selected)
 
     features = build_features(raw.copy())
-    missing_features = [c for c in FEATURE_COLS if c not in features.columns]
-    if missing_features:
-        raise ValueError(f"Missing model features: {missing_features}")
 
-    # Explicitly align by team_id, not by DataFrame positional order.
+    # Restore actual game dates for validation.
+
+    features["game_date"] = features["team_id"].map(
+        raw.set_index("team_id")["source_game_date"]
+    )
+
+    missing_features = [
+        col for col in FEATURE_COLS
+        if col not in features.columns
+    ]
+
+    if missing_features:
+        raise ValueError(
+            f"Missing model features: {missing_features}"
+        )
+
+    # ====================================================
+    # Align rows explicitly by team_id
+    # ====================================================
+
     stored_ids = stored["team_id"].tolist()
+
     if set(features["team_id"]) != set(stored_ids):
-        raise RuntimeError("Stored and reconstructed snapshots have different teams")
-    features = features.set_index("team_id", drop=False).loc[stored_ids].reset_index(drop=True)
+        raise RuntimeError(
+            "Stored and reconstructed snapshots have different teams"
+        )
+
+    features = (
+        features
+        .set_index("team_id", drop=False)
+        .loc[stored_ids]
+        .reset_index(drop=True)
+    )
+
     stored = stored.reset_index(drop=True)
 
     if not np.array_equal(
-        pd.to_datetime(features["game_date"]).dt.date.to_numpy(),
-        pd.to_datetime(stored["game_date"]).dt.date.to_numpy(),
+        pd.to_datetime(
+            features["game_date"]
+        ).dt.date.to_numpy(),
+        pd.to_datetime(
+            stored["game_date"]
+        ).dt.date.to_numpy(),
     ):
-        raise RuntimeError("Source game dates differ from stored SHAP game dates")
+        raise RuntimeError(
+            "Source game dates differ from stored SHAP game dates"
+        )
 
-    X = features[FEATURE_COLS].copy().fillna(0)
-    if not np.isfinite(X.to_numpy(dtype=float)).all():
-        raise ValueError("Reconstructed model inputs contain nonfinite values")
+    # ====================================================
+    # Prepare model inputs
+    # ====================================================
+
+    X = (
+        features[FEATURE_COLS]
+        .copy()
+        .fillna(0)
+    )
+
+    if not np.isfinite(
+        X.to_numpy(dtype=float)
+    ).all():
+        raise ValueError(
+            "Reconstructed model inputs contain nonfinite values"
+        )
 
     if scaler is not None:
+
         X_in = pd.DataFrame(
-            scaler.transform(X), columns=FEATURE_COLS, index=X.index
+            scaler.transform(X),
+            columns=FEATURE_COLS,
+            index=X.index,
         )
+
     else:
         X_in = X.copy()
-    if not np.isfinite(X_in.to_numpy(dtype=float)).all():
-        raise ValueError("Transformed model inputs contain nonfinite values")
 
-    # Reproducibility check, without running SHAP again.
-    predicted = xgb_pipeline.predict_proba(X)[:, 1]
-    stored_probability = stored["xgb_probability"].to_numpy(dtype=float)
-    if not np.allclose(predicted, stored_probability, atol=1e-4, rtol=1e-4):
-        max_error = float(np.max(np.abs(predicted - stored_probability)))
-        raise RuntimeError(
-            "Reconstructed inputs do not reproduce stored XGBoost "
-            f"probabilities (max difference {max_error:.3g}). "
-            "Check source data, feature engineering, and model version."
+    if not np.isfinite(
+        X_in.to_numpy(dtype=float)
+    ).all():
+        raise ValueError(
+            "Transformed model inputs contain nonfinite values"
         )
 
-    contributions = stored[SHAP_COLS].to_numpy(dtype=float)
-    baseline = stored["shap_base_value"].to_numpy(dtype=float)
-    if not np.isfinite(contributions).all() or not np.isfinite(baseline).all():
-        raise ValueError("Stored SHAP values or base values are nonfinite")
-    reconstructed = expit(baseline + contributions.sum(axis=1))
-    if not np.allclose(reconstructed, stored_probability, atol=1e-6, rtol=1e-6):
-        raise RuntimeError("Stored SHAP contributions do not reconstruct probability")
+    # ====================================================
+    # Validate probability reconstruction
+    # ====================================================
+
+    predicted = xgb_pipeline.predict_proba(X)[:, 1]
+
+    stored_probability = (
+        stored["xgb_probability"]
+        .to_numpy(dtype=float)
+    )
+
+    comparison = pd.DataFrame({
+        "team": stored["tri_code"].values,
+        "stored_prob": stored_probability,
+        "reconstructed_prob": predicted,
+        "difference": predicted - stored_probability,
+    })
+
+    comparison["abs_difference"] = (
+        comparison["difference"].abs()
+    )
+
+    print("\nProbability reconstruction comparison:")
+
+    print(
+        comparison.sort_values(
+            "abs_difference",
+            ascending=False,
+        ).head(15).to_string(index=False)
+    )
+
+    max_error = float(
+        comparison["abs_difference"].max()
+    )
+
+    print(
+        f"\nMaximum probability difference: {max_error:.8f}"
+    )
+
+    if not np.allclose(
+        predicted,
+        stored_probability,
+        atol=1e-4,
+        rtol=1e-4,
+    ):
+        raise RuntimeError(
+            f"Reconstructed probability mismatch: {max_error:.8f}"
+        )
+
+    # ====================================================
+    # Validate stored SHAP contributions
+    # ====================================================
+
+    contributions = (
+        stored[SHAP_COLS]
+        .to_numpy(dtype=float)
+    )
+
+    baseline = (
+        stored["shap_base_value"]
+        .to_numpy(dtype=float)
+    )
+
+    if (
+        not np.isfinite(contributions).all()
+        or not np.isfinite(baseline).all()
+    ):
+        raise ValueError(
+            "Stored SHAP values or base values are nonfinite"
+        )
+
+    reconstructed = expit(
+        baseline + contributions.sum(axis=1)
+    )
+
+    if not np.allclose(
+        reconstructed,
+        stored_probability,
+        atol=1e-6,
+        rtol=1e-6,
+    ):
+        raise RuntimeError(
+            "Stored SHAP contributions do not reconstruct probability"
+        )
 
     return stored, X, X_in
 
@@ -182,21 +399,37 @@ def run_shap_summary(
     max_display: int = 20,
     show: bool = True,
 ) -> None:
-    """Plot stored SHAP contributions for a selected historical game date.
+    """Plot stored SHAP contributions for a historical snapshot.
 
-    SHAP values explain XGBoost's raw log-odds, not the ensemble probability.
-    Returns no data; use load_shap_summary_data for programmatic inspection.
+    SHAP values explain XGBoost's raw log-odds,
+    not the predicted playoff probability directly.
+
+    Returns no data. Use load_shap_summary_data()
+    for programmatic inspection.
     """
+
     stored, _X, X_in = load_shap_summary_data(
-        con=con, season_id=season_id, snapshot_date=snapshot_date
-    )
-    selected = _parse_date(stored["snapshot_date"].iloc[0])
-    print(
-        f"▶ SHAP summary | season={season_id} | date={selected} "
-        f"| model={MODEL_VERSION_USED} | teams={len(stored)}"
+        con=con,
+        season_id=season_id,
+        snapshot_date=snapshot_date,
     )
 
-    shap_values = stored[SHAP_COLS].to_numpy(dtype=float)
+    selected = _parse_date(
+        stored["snapshot_date"].iloc[0]
+    )
+
+    print(
+        f"▶ SHAP summary | season={season_id} "
+        f"| date={selected} "
+        f"| model={MODEL_VERSION_USED} "
+        f"| teams={len(stored)}"
+    )
+
+    shap_values = (
+        stored[SHAP_COLS]
+        .to_numpy(dtype=float)
+    )
+
     shap.summary_plot(
         shap_values,
         X_in,
@@ -204,4 +437,5 @@ def run_shap_summary(
         max_display=max_display,
         show=show,
     )
+
     print("✅ Stored SHAP summary complete")

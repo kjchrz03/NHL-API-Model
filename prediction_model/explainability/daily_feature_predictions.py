@@ -5,6 +5,7 @@ The legacy ``playoff_shap_values`` table is not modified.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 import re
 
 import duckdb
@@ -17,16 +18,24 @@ from scipy.special import expit
 from config import MODEL_PATH
 from feature_engineering import build_features
 
+SHAP_BACKGROUND_PATH = (
+    Path(MODEL_PATH).parent / "shap_background_v6_balanced_200.parquet"
+)
+
 FEATURE_SOURCE_TABLE = "team_daily_stats"
 
 def _shap_table_for_version(version: str) -> str:
-    """Preserve the v6 legacy table; use dedicated tables for newer models."""
-    if version == "v6":
-        return "playoff_shap_values_v2"
-    if not re.fullmatch(r"v[0-9]+", version):
-        raise ValueError(f"Unsupported model version: {version}")
-    return f"playoff_shap_values_{version}"
+    """Use a dedicated table for fixed-background SHAP."""
 
+    if version == "v6":
+        return "playoff_shap_values_v6_balanced"
+
+    if not re.fullmatch(r"v[0-9]+", version):
+        raise ValueError(
+            f"Unsupported model version: {version}"
+        )
+
+    return f"playoff_shap_values_{version}"
 
 
 bundle = load(MODEL_PATH)
@@ -39,6 +48,36 @@ scaler = xgb_pipeline.named_steps.get("scaler")
 
 if not FEATURE_COLS or len(FEATURE_COLS) != len(set(FEATURE_COLS)):
     raise ValueError("Saved model features are empty or contain duplicates")
+
+
+def _load_shap_explainer() -> shap.TreeExplainer:
+    """Load the fixed, already-scaled 200-row historical reference once."""
+    if not SHAP_BACKGROUND_PATH.is_file():
+        raise FileNotFoundError(
+            f"SHAP background not found: {SHAP_BACKGROUND_PATH}"
+        )
+
+    background = pd.read_parquet(SHAP_BACKGROUND_PATH)
+    if background.columns.tolist() != FEATURE_COLS:
+        raise ValueError("SHAP background features do not match saved model")
+    if background.shape != (200, len(FEATURE_COLS)):
+        raise ValueError(
+            f"Expected SHAP background (200, {len(FEATURE_COLS)}), "
+            f"got {background.shape}"
+        )
+    if not np.isfinite(background.to_numpy(dtype=float)).all():
+        raise ValueError("SHAP background contains nonfinite values")
+
+    masker = shap.maskers.Independent(background, max_samples=200)
+    explainer = shap.TreeExplainer(
+        xgb_model,
+        data=masker,
+        feature_perturbation="interventional",
+        model_output="raw",
+    )
+    if explainer.data.shape != (200, len(FEATURE_COLS)):
+        raise RuntimeError("SHAP explainer did not retain all 200 rows")
+    return explainer
 
 ID_COLS = [
     "season_id", "snapshot_date", "game_date", "team_id",
@@ -179,7 +218,7 @@ def _build_shap_dataframe(
         raise ValueError("Transformed SHAP feature matrix contains nonfinite values")
 
     if explainer is None:
-        explainer = shap.TreeExplainer(xgb_model)
+        explainer = _load_shap_explainer()
     explanation = explainer(X_in)
     values = np.asarray(explanation.values, dtype=float)
     if values.shape != (len(X), len(FEATURE_COLS)):
@@ -226,7 +265,7 @@ def _validate_target_schema(con: duckdb.DuckDBPyConnection) -> None:
         missing = sorted(set(OUTPUT_COLS) - set(existing))
         extra = sorted(set(existing) - set(OUTPUT_COLS))
         raise RuntimeError(
-            "Existing SHAP v2 table is incompatible with current model. "
+            f"Existing SHAP table {FEATURE_TARGET_TABLE} is incompatible with current model. "
             f"Missing columns: {missing}; unexpected columns: {extra}; "
             f"order matches: {existing == OUTPUT_COLS}. "
             "No rows have been modified."
@@ -238,17 +277,17 @@ def _write_shap_dataframe(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> N
         return
     target = _quote(FEATURE_TARGET_TABLE)
     quoted_cols = ", ".join(_quote(col) for col in OUTPUT_COLS)
-    con.register("shap_updates_v2", df)
+    con.register("shap_updates_balanced", df)
     started = False
     try:
         con.execute("BEGIN TRANSACTION")
         started = True
         if not _table_exists(con):
             con.execute(
-                f"CREATE TABLE {target} AS SELECT * FROM shap_updates_v2 WHERE 1 = 0"
+                f"CREATE TABLE {target} AS SELECT * FROM shap_updates_balanced WHERE 1 = 0"
             )
             con.execute(
-                f"""CREATE UNIQUE INDEX shap_{MODEL_VERSION_USED}_unique_snapshot
+                f"""CREATE UNIQUE INDEX shap_{MODEL_VERSION_USED}_balanced_unique_snapshot
                     ON {target} (season_id, snapshot_date, team_id, model_version)"""
             )
         _validate_target_schema(con)
@@ -257,7 +296,7 @@ def _write_shap_dataframe(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> N
         con.execute(
             f"""DELETE FROM {target} AS t
                 WHERE EXISTS (
-                    SELECT 1 FROM shap_updates_v2 AS u
+                    SELECT 1 FROM shap_updates_balanced AS u
                     WHERE u.season_id = t.season_id
                       AND u.snapshot_date = t.snapshot_date
                       AND u.model_version = t.model_version
@@ -265,7 +304,7 @@ def _write_shap_dataframe(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> N
         )
         con.execute(
             f"""INSERT INTO {target} ({quoted_cols})
-                SELECT {quoted_cols} FROM shap_updates_v2"""
+                SELECT {quoted_cols} FROM shap_updates_balanced"""
         )
         con.execute("COMMIT")
         started = False
@@ -274,7 +313,7 @@ def _write_shap_dataframe(con: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> N
             con.execute("ROLLBACK")
         raise
     finally:
-        con.unregister("shap_updates_v2")
+        con.unregister("shap_updates_balanced")
 
 
 def run_prediction_features(
@@ -300,7 +339,9 @@ def run_prediction_features(
         print("✅ All game-date snapshots already present")
         return
     print(f"   Dates to process: {len(dates)}")
-    explainer = shap.TreeExplainer(xgb_model)
+    explainer = _load_shap_explainer()
+    print(f"   SHAP background: {explainer.data.shape[0]} observations")
+    print(f"   SHAP baseline probability: {expit(explainer.expected_value):.4%}")
     total_rows = 0
         
     for date in dates:

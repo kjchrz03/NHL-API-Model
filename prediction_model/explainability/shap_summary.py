@@ -19,6 +19,7 @@ Safeguards:
 - Explicit full-season refresh support
 
 The existing v6 playoff_shap_summary table is preserved.
+Balanced v6 summaries are written to separate tables.
 """
 
 from __future__ import annotations
@@ -77,7 +78,7 @@ DIRECTIONS = (
 
 # Changing the ranking algorithm or TOP_N will
 # invalidate previous processing hashes.
-HASH_VERSION = "shap-summary-v2"
+HASH_VERSION = "shap-summary-v6-balanced-v1"
 
 
 # ============================================================
@@ -102,9 +103,9 @@ def _tables_for_version(version: str) -> dict:
 
     if version == "v6":
         return {
-            "source": "playoff_shap_values_v2",
-            "summary": "playoff_shap_summary",
-            "state": "playoff_shap_summary_state",
+            "source": "playoff_shap_values_v6_balanced",
+            "summary": "playoff_shap_summary_v6_balanced",
+            "state": "playoff_shap_summary_state_v6_balanced",
         }
 
     return {
