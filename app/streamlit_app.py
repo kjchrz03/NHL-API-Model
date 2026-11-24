@@ -36,11 +36,11 @@ st.set_page_config(page_title="Check This Data",
 # image = Image.open('logo.png')
 # st.image(image)
 
-primaryColor="#fafaff"
-backgroundColor="#e1dee9"
-secondaryBackgroundColor="#d5cfe1"
-textColor="#48484E"
-font="Garamond"
+# primaryColor="#fafaff"
+# backgroundColor="#e1dee9"
+# secondaryBackgroundColor="#d5cfe1"
+# textColor="#48484E"
+# font="Garamond"
 
 option = {
     "tooltip": {"trigger": "axis"},
