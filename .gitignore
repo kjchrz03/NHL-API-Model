@@ -26,9 +26,7 @@ scratch/
 backup/
 backfill/
 archive/
-duckdb/
-sql/
-db/
+
 
 # =====================================================
 # OS / Editor
