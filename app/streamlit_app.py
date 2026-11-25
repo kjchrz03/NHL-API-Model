@@ -2187,7 +2187,7 @@ with tab_teams:
                                 
                                 
                                 st.caption(
-                                    f"Completed-game results through the team's last game date"
+                                    f"Completed-game results through the team's last game date on "
                                     f"{context['snapshot_date']:%B %d, %Y} — "
                                     f"Home: {home_pts} points in {home_gp} games "
                                     f"(goal differential {home_gd:+d}) · "
