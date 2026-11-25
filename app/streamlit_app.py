@@ -2185,16 +2185,9 @@ with tab_teams:
                                 home_gd = int(context["postgame_home_goal_diff"])
                                 road_gd = int(context["postgame_road_goal_diff"])
                                 
-                                st.write({
-                                "Latest date variable": latest_date,
-                                "Latest SHAP snapshot": shap_df["snapshot_date"].max(),
-                                "Latest SHAP game date": shap_df["game_date"].max(),
-                                "Latest context snapshot": shap_context["snapshot_date"].max(),
-                                "Latest context source game date": shap_context["source_game_date"].max()
-                            })
-
+                                
                                 st.caption(
-                                    f"Completed-game results through "
+                                    f"Completed-game results through the team's last game date"
                                     f"{context['snapshot_date']:%B %d, %Y} — "
                                     f"Home: {home_pts} points in {home_gp} games "
                                     f"(goal differential {home_gd:+d}) · "
